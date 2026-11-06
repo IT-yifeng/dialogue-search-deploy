@@ -9,7 +9,7 @@ import { Hero } from '../components/Hero';
 import { LogoMark } from '../components/icons';
 import { LangToggle } from '../components/LangToggle';
 import { Pagination } from '../components/Pagination';
-import { ResultCard } from '../components/ResultCard';
+import { SearchResultGrid } from '../components/SearchResultGrid';
 import { ResultSkeleton } from '../components/ResultSkeleton';
 import { SearchBar } from '../components/SearchBar';
 import { SearchResultOverlay } from '../components/SearchResultOverlay';
@@ -244,17 +244,9 @@ export default function SearchPage() {
             结果较多，试试开启「仅完整台词」收紧匹配
           </p>
         )}
-        <ul className={`space-y-3 transition-opacity ${search.isPlaceholderData ? 'opacity-50' : ''}`}>
-          {data.items.map((item, i) => (
-            <ResultCard
-              key={item.id}
-              line={item}
-              mode={mode}
-              terms={terms}
-              onOpenOverlay={() => openSearchOverlay(data.items, i)}
-            />
-          ))}
-        </ul>
+        <div className={`transition-opacity ${search.isPlaceholderData ? 'opacity-50' : ''}`}>
+          <SearchResultGrid items={data.items} terms={terms} onOpenOverlay={(i) => openSearchOverlay(data.items, i)} />
+        </div>
         <Pagination page={page} totalPages={totalPages} onChange={handlePageChange} />
       </div>
     );
@@ -264,7 +256,7 @@ export default function SearchPage() {
     <div className="relative min-h-screen overflow-x-clip">
       <div className={hasQuery ? 'page-backdrop page-backdrop-soft' : 'page-backdrop'} aria-hidden />
 
-      <div className={`mx-auto max-w-3xl px-4 ${hasSelection ? 'pb-40' : 'pb-20'}`}>
+      <div className={`mx-auto max-w-6xl px-4 ${hasSelection ? 'pb-40' : 'pb-20'}`}>
         <header
           className={
             hasQuery

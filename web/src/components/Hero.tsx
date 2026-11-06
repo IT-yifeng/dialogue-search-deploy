@@ -92,7 +92,6 @@ export function Hero({ value, onSubmit, mode, highlightTerms, onDiscoverPick }: 
       {discover.isError ? null : discover.data && discover.data.items.length > 0 ? (
         <DiscoverGrid
           lines={discover.data.items}
-          mode={mode}
           terms={highlightTerms}
           onPick={(line, i) => onDiscoverPick(line, i, discover.data!.items)}
         />

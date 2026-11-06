@@ -1,7 +1,7 @@
 // 搜索结果 / 推荐的片段蒙版（手册 §7.2、§7.6）。
 import { useEffect } from 'react';
 import type { SearchItem } from '../api/types';
-import { useVideoMidFrame } from '../hooks/useVideoMidFrame';
+import { useVideoPosterFrame } from '../hooks/useVideoPosterFrame';
 import { formatSeasonEpisodeLabel } from '../lib/formatTime';
 import { pickDisplayLines, type LangMode } from '../lib/displayLines';
 import { HighlightText } from './HighlightText';
@@ -35,7 +35,7 @@ export function SearchResultOverlay({
   shareUrl,
   onCopyLink,
 }: Props) {
-  const { dataUrl, loading, videoRef } = useVideoMidFrame(line, open);
+  const { ready, loading, failed, videoRef } = useVideoPosterFrame(line, open);
   const display = line ? pickDisplayLines(line, mode) : [];
 
   useEffect(() => {
@@ -61,9 +61,9 @@ export function SearchResultOverlay({
       role="dialog"
       aria-modal="true"
       aria-label="片段预览"
-      className="fixed inset-0 z-40 flex flex-col bg-black/70 backdrop-blur-sm sm:p-6"
+      className="fixed inset-0 z-40 flex flex-col bg-black/70 backdrop-blur-sm p-3 sm:p-6"
     >
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden sm:mx-auto sm:my-auto sm:max-h-[90vh] sm:max-w-3xl sm:rounded-card sm:shadow-lift">
+      <div className="flex min-h-0 w-full max-w-[min(100%,56rem)] flex-1 flex-col overflow-hidden sm:mx-auto sm:my-auto sm:max-h-[92vh] sm:rounded-card sm:shadow-lift lg:max-w-[min(100%,64rem)]">
         <div className="flex shrink-0 items-center justify-between gap-2 border-b border-white/10 bg-surface px-4 py-3 sm:rounded-t-card">
           <button
             type="button"
@@ -82,22 +82,25 @@ export function SearchResultOverlay({
           </button>
         </div>
 
-        <div className="relative min-h-0 flex-1 overflow-y-auto bg-ink">
-          <video ref={videoRef} muted playsInline preload="metadata" className="hidden" crossOrigin="anonymous" />
-
-          <div
-            className="relative aspect-video w-full bg-cover bg-center"
-            style={
-              dataUrl
-                ? { backgroundImage: `linear-gradient(to top, rgb(0 0 0 / 0.5), transparent), url(${dataUrl})` }
-                : { background: 'rgb(var(--c-brand-soft))' }
-            }
-          >
-            <span className="absolute left-3 top-3 rounded-pill bg-black/55 px-2.5 py-1 text-xs font-semibold tabular-nums text-white">
+        <div className="relative min-h-[38vh] flex-1 overflow-y-auto bg-ink sm:min-h-[42vh]">
+          {/* 用大尺寸 16:9 视频区，避免蒙版过窄；关键帧用 video 元素避免跨域 canvas 截图为空 */}
+          <div className="relative aspect-video w-full overflow-hidden bg-[rgb(var(--c-brand-soft))]">
+            {line.hasVideo && !failed && (
+              <video
+                ref={videoRef}
+                muted
+                playsInline
+                preload="auto"
+                className={`absolute inset-0 h-full w-full object-contain ${ready ? 'opacity-100' : 'opacity-0'}`}
+                crossOrigin="anonymous"
+                aria-hidden
+              />
+            )}
+            <span className="absolute left-3 top-3 z-10 rounded-pill bg-black/55 px-2.5 py-1 text-xs font-semibold tabular-nums text-white">
               {formatSeasonEpisodeLabel(line.episode.season, line.episode.episode)}
             </span>
             {loading && (
-              <span className="absolute right-3 top-3 h-5 w-5 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+              <span className="absolute right-3 top-3 z-10 h-5 w-5 animate-spin rounded-full border-2 border-white/30 border-t-white" />
             )}
           </div>
 
