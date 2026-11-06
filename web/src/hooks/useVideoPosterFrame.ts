@@ -55,17 +55,57 @@ export function useVideoPosterFrame(line: SearchItem | null, enabled: boolean): 
     if (!video) return;
 
     let cancelled = false;
-    const target = midpointSec(line);
-
-    const onSeeked = () => {
-      if (!cancelled) setReady(true);
-    };
+    const rawTarget = midpointSec(line);
 
     const onError = () => {
       if (!cancelled) {
         setFailed(true);
         setReady(false);
       }
+    };
+
+    /** 有的浏览器在仅有 loadedmetadata 时 seek 不落帧；seeked 也可能晚到。用多事件 + 超时兜底。 */
+    const tryMarkReady = () => {
+      if (cancelled) return;
+      if (video.videoWidth >= 2 && video.videoHeight >= 2) setReady(true);
+    };
+
+    const onSeeked = () => tryMarkReady();
+
+    const onTimeUpdate = () => {
+      if (cancelled) return;
+      const d = video.duration;
+      if (!Number.isFinite(d) || d <= 0) return;
+      const lo = Math.min(rawTarget, Math.max(0, d - 0.05));
+      if (Math.abs(video.currentTime - lo) < 0.25) tryMarkReady();
+    };
+
+    const seekToTarget = () => {
+      if (cancelled) return;
+      const d = video.duration;
+      if (!Number.isFinite(d) || d <= 0) return;
+      const t = Math.min(Math.max(0, rawTarget), Math.max(0, d - 0.05));
+      try {
+        video.currentTime = t;
+      } catch {
+        if (!cancelled) {
+          setFailed(true);
+          setReady(false);
+        }
+      }
+    };
+
+    const onLoadedMeta = () => {
+      seekToTarget();
+    };
+
+    const onLoadedData = () => {
+      seekToTarget();
+      tryMarkReady();
+    };
+
+    const onCanPlay = () => {
+      seekToTarget();
     };
 
     video.pause();
@@ -76,27 +116,28 @@ export function useVideoPosterFrame(line: SearchItem | null, enabled: boolean): 
     video.removeAttribute('crossorigin');
     video.src = url;
     video.addEventListener('seeked', onSeeked);
+    video.addEventListener('timeupdate', onTimeUpdate);
     video.addEventListener('error', onError);
+    video.addEventListener('loadedmetadata', onLoadedMeta);
+    video.addEventListener('loadeddata', onLoadedData);
+    video.addEventListener('canplay', onCanPlay);
 
-    const onLoadedMeta = () => {
+    const stallTimer = window.setTimeout(() => {
       if (cancelled) return;
-      try {
-        video.currentTime = target;
-      } catch {
-        if (!cancelled) {
-          setFailed(true);
-          setReady(false);
-        }
-      }
-    };
+      tryMarkReady();
+    }, 4000);
 
-    video.addEventListener('loadedmetadata', onLoadedMeta, { once: true });
     void video.load();
 
     return () => {
       cancelled = true;
+      window.clearTimeout(stallTimer);
       video.removeEventListener('seeked', onSeeked);
+      video.removeEventListener('timeupdate', onTimeUpdate);
       video.removeEventListener('error', onError);
+      video.removeEventListener('loadedmetadata', onLoadedMeta);
+      video.removeEventListener('loadeddata', onLoadedData);
+      video.removeEventListener('canplay', onCanPlay);
       video.pause();
       video.removeAttribute('src');
       video.load();

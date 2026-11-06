@@ -508,7 +508,7 @@ sequenceDiagram
 | 关键词、季、exact、页码 | **URL**（唯一事实来源） | 用 `useSearchParams` 读写 |
 | 可选：`lineId` | **URL** | 深链打开片段蒙版时用；与 `q` 可同时存在（从分享链回到搜索上下文） |
 | 搜索结果、上下文、分享详情、推荐列表 | TanStack Query | 自动缓存、重试；`discover` 单独 query key |
-| 片段蒙版：当前索引、是否打开 | Zustand 或 URL + 派生 | 蒙版内「上一条 / 下一条」依赖当前列表（搜索结果页 items 或 discover 的 9 条） |
+| 片段蒙版：当前索引、是否打开 | React state + `lineId`（URL） | 蒙版内「上一条 / 下一条」依赖当前列表（搜索结果页 items 或 discover 的 9 条）；**关闭时**须同时清掉 URL 的 `lineId`，并用 `ref` 跳过一次「深链自动重开」，否则会出现「点关闭要点两下」（先关 overlay、`lineId` 仍在，effect 立刻再打开） |
 | 已勾选台词 | Zustand + `sessionStorage` | 存完整台词对象，分享对话框无需再请求 |
 | 语言模式 | Zustand + `localStorage` | |
 | 当前播放中的台词 ID | Zustand | 保证同时只有一个播放器 |
@@ -588,6 +588,7 @@ sequenceDiagram
 
 - **时刻**：在台词起止的中点定格：\((startMs + endMs) / 2\) 秒，与管线里的时间轴一致。
 - **实现（MVP）**：对每条卡片请求 `GET /api/lines/:id/play` 拿到预签名 URL，在**可见或叠放的** `<video>` 上设置 `currentTime` 后 `pause()`，用视频帧本身作为「关键帧」展示。**不得**依赖 `canvas.drawImage` + `toDataURL` 作为卡片底图：R2 预签名 URL 为跨域资源时，画布会被污染，截图为空。
+- **seek 时机**：不能只在 `loadedmetadata` 上设一次 `currentTime`：部分浏览器在元数据刚到、数据未缓冲时 seek **不落帧**、`seeked` 也可能不来。应结合 `loadeddata` / `canplay` 再设 `currentTime`，监听 `seeked` 与 `timeupdate`，并在 `videoWidth` / `videoHeight` 有效时认为已就绪；可设短超时兜底，避免 loading 转圈卡住。
 - **不要**给用于静帧的 `<video>` 设置 `crossOrigin="anonymous"`（或 `crossorigin`，等价）：在 CORS 模式下，若 R2 桶**未**对预签名 GET 返回 `Access-Control-Allow-Origin`（默认往往如此），整段视频加载会 **失败**（`error`），表现为永远只有渐变、无画面。**静帧只显示像素、不读 canvas，不需要 CORS**；播放用的 `<video>`（`ClipPlayer`）同样不显式设 crossOrigin。
 - **预生成缩略图入库（可选，非 MVP）**：可把管线截好的 JPEG 存 R2、库里只存 key/url，列表用 `<img>`。好处是首屏不重；代价是迁移、存储与管线插帧。**当前不做**：仍以 `<video>` seek 为准。
 - **性能**：TanStack Query 按 `lineId` 缓存 `play` 响应；首屏最多 9～20 路 `<video>` 元数据 + seek，弱网可能略慢，以加载圈为反馈。

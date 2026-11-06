@@ -42,6 +42,8 @@ export default function SearchPage() {
   const [overlay, setOverlay] = useState<OverlayState | null>(null);
   /** 蒙版里「上一条 / 下一条」跨页时，等新页数据到了再定位到哪一条 */
   const pagePickRef = useRef<'first' | 'last' | null>(null);
+  /** 用户点「关闭」会同时清 overlay 与 URL 的 lineId；若只先清 overlay，深链 effect 会因 URL 仍带 lineId 立刻把蒙版再打开，表现为要点两次关闭 */
+  const skipDeepLinkReopenRef = useRef(false);
 
   const deepLine = useQuery({
     queryKey: ['line', lineId],
@@ -81,6 +83,8 @@ export default function SearchPage() {
   const totalPages = data ? Math.ceil(data.total / data.pageSize) : 0;
 
   const closeOverlay = useCallback(() => {
+    // 先立标志：避免「先 setOverlay(null) → URL 仍带 lineId → 深链 effect 立刻再打开蒙版」的双击关闭
+    skipDeepLinkReopenRef.current = true;
     setOverlay(null);
     setLineId(undefined);
   }, [setLineId]);
@@ -104,7 +108,11 @@ export default function SearchPage() {
 
   // 深链 ?lineId=：有搜索词时在结果里定位；无搜索词（首页）时 GET /api/lines/:id 拉单条再开蒙版
   useEffect(() => {
-    if (lineId === undefined || overlay !== null) return;
+    if (lineId === undefined) {
+      skipDeepLinkReopenRef.current = false;
+      return;
+    }
+    if (skipDeepLinkReopenRef.current || overlay !== null) return;
     if (hasQuery) {
       if (!data?.items?.length) return;
       const idx = data.items.findIndex((x) => x.id === lineId);
