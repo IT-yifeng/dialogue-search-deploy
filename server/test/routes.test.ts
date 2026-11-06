@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { Hono } from 'hono';
 import { errorHandler, notFoundHandler } from '../src/lib/httpError.js';
 import type { EpisodesRepo } from '../src/repos/episodesRepo.js';
-import type { LineContext, LinesRepo, PlayInfo, SearchParams } from '../src/repos/linesRepo.js';
+import type { LineContext, LinesRepo, PlayInfo, SearchHit, SearchParams } from '../src/repos/linesRepo.js';
 import { createEpisodesRoutes } from '../src/routes/episodes.js';
 import { createLinesRoutes } from '../src/routes/lines.js';
 import { createSearchRoutes } from '../src/routes/search.js';
@@ -18,12 +18,21 @@ interface Spy {
   playCalls: number[];
 }
 
-function setup(opts: { context?: LineContext | null; throwOnSearch?: Error; play?: PlayInfo | null } = {}) {
+function setup(opts: {
+  context?: LineContext | null;
+  throwOnSearch?: Error;
+  play?: PlayInfo | null;
+  /** 第二次 search 调用的返回值（用于多词 AND=0 → OR 放宽） */
+  secondSearch?: { total: number; items: SearchHit[] };
+} = {}) {
   const spy: Spy = { searchCalls: [], contextCalls: [], playCalls: [] };
+  let searchIdx = 0;
   const lines: LinesRepo = {
     async search(p) {
       if (opts.throwOnSearch) throw opts.throwOnSearch;
       spy.searchCalls.push(p);
+      searchIdx += 1;
+      if (searchIdx === 2 && opts.secondSearch) return opts.secondSearch;
       return { total: 0, items: [] };
     },
     async findContext(id, before, after) {
@@ -35,6 +44,9 @@ function setup(opts: { context?: LineContext | null; throwOnSearch?: Error; play
       return opts.play === undefined ? null : opts.play;
     },
     async findByIds() {
+      return [];
+    },
+    async sampleWithVideo() {
       return [];
     },
   };
@@ -75,14 +87,28 @@ test('search：默认分页参数，返回契约结构', async () => {
   const { app, spy } = setup();
   const res = await app.request('/api/search?q=penny');
   assert.equal(res.status, 200);
-  assert.deepEqual(await res.json(), { total: 0, page: 1, pageSize: 20, items: [] });
-  assert.deepEqual(spy.searchCalls[0], { terms: ['penny'], season: undefined, limit: 20, offset: 0 });
+  assert.deepEqual(await res.json(), { total: 0, page: 1, pageSize: 20, relaxed: false, items: [] });
+  assert.deepEqual(spy.searchCalls[0], {
+    terms: ['penny'],
+    season: undefined,
+    limit: 20,
+    offset: 0,
+    mode: 'and',
+    exact: false,
+  });
 });
 
 test('search：page / pageSize / season 换算为 limit / offset', async () => {
   const { app, spy } = setup();
   await app.request('/api/search?q=a&season=2&page=3&pageSize=10');
-  assert.deepEqual(spy.searchCalls[0], { terms: ['a'], season: 2, limit: 10, offset: 20 });
+  assert.deepEqual(spy.searchCalls[0], {
+    terms: ['a'],
+    season: 2,
+    limit: 10,
+    offset: 20,
+    mode: 'and',
+    exact: false,
+  });
 });
 
 test('search：URL 编码的 % 与中文原样传给 repo', async () => {
@@ -91,6 +117,92 @@ test('search：URL 编码的 % 与中文原样传给 repo', async () => {
   await app.request(`/api/search?q=${encodeURIComponent('佩妮 penny')}`);
   assert.deepEqual(spy.searchCalls[0]?.terms, ['%']);
   assert.deepEqual(spy.searchCalls[1]?.terms, ['佩妮', 'penny']);
+  assert.equal(spy.searchCalls[1]?.mode, 'and');
+});
+
+test('search：exact=1 不切词', async () => {
+  const { app, spy } = setup();
+  await app.request('/api/search?q=a%20b+c&exact=1');
+  assert.deepEqual(spy.searchCalls[0], {
+    terms: ['a b c'],
+    season: undefined,
+    limit: 20,
+    offset: 0,
+    mode: 'and',
+    exact: true,
+  });
+});
+
+test('search：多词 AND 无结果时放宽为 OR 并 relaxed', async () => {
+  const hit: SearchHit = {
+    id: 1,
+    episode: { season: 1, episode: 1, titleEn: 'A', titleZh: '甲' },
+    startMs: 0,
+    endMs: 100,
+    en: 'x',
+    zh: 'y',
+    hasVideo: true,
+  };
+  const { app, spy } = setup({ secondSearch: { total: 1, items: [hit] } });
+  const res = await app.request('/api/search?q=a+b');
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { total: 1, page: 1, pageSize: 20, relaxed: true, items: [hit] });
+  assert.equal(spy.searchCalls.length, 2);
+  assert.equal(spy.searchCalls[0]?.mode, 'and');
+  assert.equal(spy.searchCalls[1]?.mode, 'or');
+});
+
+test('search：多词 AND 有结果时不调 OR', async () => {
+  const hit: SearchHit = {
+    id: 1,
+    episode: { season: 1, episode: 1, titleEn: 'A', titleZh: '甲' },
+    startMs: 0,
+    endMs: 100,
+    en: 'x',
+    zh: 'y',
+    hasVideo: true,
+  };
+  const lines: LinesRepo = {
+    async search(p) {
+      if (p.mode === 'and') return { total: 1, items: [hit] };
+      return { total: 99, items: [] };
+    },
+    async findContext() {
+      return null;
+    },
+    async findPlayInfo() {
+      return null;
+    },
+    async findByIds() {
+      return [];
+    },
+    async sampleWithVideo() {
+      return [];
+    },
+  };
+  const storage: StorageDriver = {
+    async put() {},
+    async exists() {
+      return true;
+    },
+    async getPlayUrl(key) {
+      return `/media/${key}`;
+    },
+  };
+  const episodes: EpisodesRepo = {
+    async listAll() {
+      return [{ season: 1, episode: 1, titleEn: 'A', titleZh: '甲', hasVideo: true }];
+    },
+  };
+  const service = createSearchService(lines, episodes);
+  const app = new Hono();
+  app.onError(errorHandler);
+  app.notFound(notFoundHandler);
+  app.route('/api/search', createSearchRoutes(service));
+  app.route('/api/lines', createLinesRoutes(service, createPlayService(lines, storage)));
+  const res = await app.request('/api/search?q=a+b');
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { total: 1, page: 1, pageSize: 20, relaxed: false, items: [hit] });
 });
 
 test('search：非法参数返回 400 且不查库', async () => {
@@ -149,6 +261,63 @@ test('context：before / after 可为 0 和 5，传递给 repo', async () => {
 test('context：台词不存在返回 404', async () => {
   const { app } = setup({ context: null });
   await expectError(await app.request('/api/lines/999/context'), 404, 'NOT_FOUND');
+});
+
+test('line：GET /api/lines/:id 返回单条，与 search items 同形', async () => {
+  const hit: SearchHit = {
+    id: 42,
+    episode: { season: 1, episode: 2, titleEn: 'T', titleZh: '标题' },
+    startMs: 1000,
+    endMs: 2000,
+    en: 'hello',
+    zh: '你好',
+    hasVideo: true,
+  };
+  const lines: LinesRepo = {
+    async search() {
+      return { total: 0, items: [] };
+    },
+    async findContext() {
+      return null;
+    },
+    async findPlayInfo() {
+      return null;
+    },
+    async findByIds(ids) {
+      assert.deepEqual(ids, [42]);
+      return [hit];
+    },
+    async sampleWithVideo() {
+      return [];
+    },
+  };
+  const storage: StorageDriver = {
+    async put() {},
+    async exists() {
+      return true;
+    },
+    async getPlayUrl(key) {
+      return `/media/${key}`;
+    },
+  };
+  const episodes: EpisodesRepo = {
+    async listAll() {
+      return [];
+    },
+  };
+  const service = createSearchService(lines, episodes);
+  const app = new Hono();
+  app.onError(errorHandler);
+  app.notFound(notFoundHandler);
+  app.route('/api/lines', createLinesRoutes(service, createPlayService(lines, storage)));
+  const res = await app.request('/api/lines/42');
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), hit);
+});
+
+test('line：不存在返回 404', async () => {
+  const { app } = setup();
+  await expectError(await app.request('/api/lines/1'), 404, 'NOT_FOUND');
 });
 
 test('context：非法参数返回 400 且不查库', async () => {

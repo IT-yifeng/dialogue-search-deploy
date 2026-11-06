@@ -1,6 +1,17 @@
-// 内存限流（固定窗口）。单实例部署够用；重启后计数清零，对“防暴力猜口令”这个目的影响不大。
+// 内存限流（固定窗口）。单实例部署够用；重启后计数清零。
+// 手册 §4.2 不设站点口令，这里按「IP + 路由」挡住扫接口和刷分享（阈值见手册 §6）。
 import { getConnInfo } from '@hono/node-server/conninfo';
-import type { Context, MiddlewareHandler } from 'hono';
+import type { Context, Hono, MiddlewareHandler } from 'hono';
+
+/** 与手册 §6 的限流表一致。测试与入口都引用这里，避免两处各写一份数字。 */
+export const API_RATE_LIMITS = {
+  windowMs: 60_000,
+  searchPerMin: 60,
+  /** discover 每次都 ORDER BY random()，比搜索重，阈值更低 */
+  discoverPerMin: 30,
+  lineReadPerMin: 60,
+  createSharePerMin: 10,
+} as const;
 
 /**
  * 取客户端 IP，用作限流的 key。
@@ -56,8 +67,57 @@ export function createRateLimit(opts: RateLimitOptions): MiddlewareHandler {
     if (b.count > opts.max) {
       // 这里直接返回响应而不是抛 AppError：需要附带 Retry-After 头，AppError 只携带状态码与消息
       c.header('Retry-After', String(Math.max(1, Math.ceil((b.resetAt - t) / 1000))));
-      return c.json({ error: { code: 'RATE_LIMITED', message: '尝试次数过多，请稍后再试' } }, 429);
+      return c.json({ error: { code: 'RATE_LIMITED', message: '请求过于频繁，请稍后再试' } }, 429);
     }
     await next();
   };
+}
+
+/**
+ * 把 §6 的限流挂到对应路由上。
+ * 桶的 key 用路由模板而不是具体 id：否则每次换一个 lineId 就是新桶，扫库不受限。
+ * 分享的 GET（读取、分享内播放）留给 M7，这里只限制创建。
+ */
+export function mountApiRateLimits(app: Hono, now?: () => number): void {
+  const { windowMs } = API_RATE_LIMITS;
+  const byRoute = (route: string) => (c: Context) => `${clientIp(c)} ${route}`;
+
+  app.use(
+    '/api/search',
+    createRateLimit({ windowMs, max: API_RATE_LIMITS.searchPerMin, now, keyOf: byRoute('GET /api/search') }),
+  );
+  app.use(
+    '/api/discover',
+    createRateLimit({ windowMs, max: API_RATE_LIMITS.discoverPerMin, now, keyOf: byRoute('GET /api/discover') }),
+  );
+  app.use(
+    '/api/lines/:id/play',
+    createRateLimit({
+      windowMs,
+      max: API_RATE_LIMITS.lineReadPerMin,
+      now,
+      keyOf: byRoute('GET /api/lines/:id/play'),
+    }),
+  );
+  app.use(
+    '/api/lines/:id/context',
+    createRateLimit({
+      windowMs,
+      max: API_RATE_LIMITS.lineReadPerMin,
+      now,
+      keyOf: byRoute('GET /api/lines/:id/context'),
+    }),
+  );
+
+  const createShare = createRateLimit({
+    windowMs,
+    max: API_RATE_LIMITS.createSharePerMin,
+    now,
+    keyOf: byRoute('POST /api/shares'),
+  });
+  app.use('/api/shares', async (c, next) => {
+    // 前缀匹配会落到 /api/shares/:id；只对创建接口计数
+    if (c.req.method !== 'POST' || c.req.path !== '/api/shares') return next();
+    return createShare(c, next);
+  });
 }

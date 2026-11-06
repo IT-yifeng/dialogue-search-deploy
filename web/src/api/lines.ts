@@ -1,5 +1,10 @@
 import { getJson } from './client';
-import type { ContextResponse, PlayResponse } from './types';
+import type { ContextResponse, PlayResponse, SearchItem } from './types';
+
+/** 单条台词（与 search items[] 单项同形），供深链 ?lineId= 在无搜索词时拉取 */
+export function fetchLine(lineId: number, signal?: AbortSignal): Promise<SearchItem> {
+  return getJson<SearchItem>(`/api/lines/${lineId}`, signal);
+}
 
 export function fetchPlay(lineId: number, signal?: AbortSignal): Promise<PlayResponse> {
   return getJson<PlayResponse>(`/api/lines/${lineId}/play`, signal);

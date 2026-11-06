@@ -9,6 +9,7 @@ import { ResultSkeleton } from '../components/ResultSkeleton';
 import { ShareLineCard } from '../components/ShareLineCard';
 import { ErrorBar } from '../components/StateViews';
 import { ThemeToggle } from '../components/ThemeToggle';
+import { CopyrightFooter } from '../components/CopyrightFooter';
 import { useLangStore } from '../store/lang';
 
 const primaryLink =
@@ -90,6 +91,7 @@ export default function SharePage() {
         <main>
           <h1 className="mb-4 text-lg font-extrabold">有人分享了几句台词</h1>
           {body}
+          <CopyrightFooter />
         </main>
       </div>
     </div>

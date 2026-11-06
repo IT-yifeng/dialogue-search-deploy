@@ -1,6 +1,6 @@
 // 集中读取并校验环境变量。
 // 配置有误时直接抛错让进程启动失败，避免问题拖到上线后才暴露。
-// 必填项（DATABASE_URL 等）也在这里校验；后续里程碑新增的变量同样放这里。
+// 手册 §4.2：不设站点口令；不在此处读取 SITE_PASSCODE / COOKIE_SECRET。
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 
@@ -20,10 +20,6 @@ export interface Config {
   storageDriver: 'local' | 'r2';
   /** r2 驱动的凭据；storageDriver 为 local 时为 null */
   r2: R2Config | null;
-  /** 站点口令（门禁） */
-  sitePasscode: string;
-  /** 门禁 cookie 的签名密钥 */
-  cookieSecret: string;
   /** local 驱动读取视频的目录（默认 <仓库根>/work/mp4，与管线输出位置一致） */
   mediaDir: string;
   /** 站点外部地址，用来拼分享链接；不带末尾斜杠 */
@@ -58,8 +54,7 @@ function parseStorageDriver(raw: string | undefined, nodeEnv: Config['nodeEnv'])
   if (driver !== 'local' && driver !== 'r2') {
     throw new Error(`STORAGE_DRIVER 取值无效：${raw}（可选 local / r2）`);
   }
-  // local 驱动签出的 /media/... 地址要过门禁，分享页的免口令访客会播不出来；
-  // 与其上线后才发现，不如生产环境直接拒绝启动
+  // local 驱动签出的 /media/... 无法给公网用户直连；生产环境必须 R2
   if (driver === 'local' && nodeEnv === 'production') {
     throw new Error('生产环境不能使用 STORAGE_DRIVER=local：请改为 r2 并填写 R2_* 变量');
   }
@@ -81,35 +76,8 @@ function parseR2(env: NodeJS.ProcessEnv, driver: Config['storageDriver']): R2Con
   };
 }
 
-// .env.example 里的占位值：生产环境若还是它们，等于没设门禁，必须拒绝启动
-const PLACEHOLDER_PASSCODE = 'change-me';
-const PLACEHOLDER_SECRET_PREFIX = 'replace-with-a-random-string';
-const MIN_SECRET_LENGTH = 32;
-
-function parseSitePasscode(raw: string | undefined, nodeEnv: Config['nodeEnv']): string {
-  const v = raw?.trim() ?? '';
-  if (nodeEnv === 'production') {
-    if (v === '' || v === PLACEHOLDER_PASSCODE) throw new Error('生产环境必须设置 SITE_PASSCODE，且不能使用示例占位值');
-    return v;
-  }
-  // 开发 / 测试环境没配就用占位值，开箱即用；这个值不会出现在生产
-  return v === '' ? PLACEHOLDER_PASSCODE : v;
-}
-
-function parseCookieSecret(raw: string | undefined, nodeEnv: Config['nodeEnv']): string {
-  const v = raw?.trim() ?? '';
-  if (nodeEnv === 'production') {
-    if (v.length < MIN_SECRET_LENGTH || v.startsWith(PLACEHOLDER_SECRET_PREFIX)) {
-      throw new Error(`生产环境的 COOKIE_SECRET 必须是 ${MIN_SECRET_LENGTH} 位以上的随机串，且不能使用示例占位值`);
-    }
-    return v;
-  }
-  return v === '' ? `${PLACEHOLDER_SECRET_PREFIX}-for-local-development-only` : v;
-}
-
 function parsePublicBaseUrl(raw: string | undefined, nodeEnv: Config['nodeEnv']): string {
   if (raw === undefined || raw.trim() === '') {
-    // 开发默认指向 Vite（分享页由前端路由渲染）；线上缺失会生成指向 localhost 的死链接，宁可启动失败
     if (nodeEnv === 'production') throw new Error('缺少 PUBLIC_BASE_URL：生产环境必须填写站点外部地址');
     return 'http://localhost:5173';
   }
@@ -134,8 +102,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     databaseUrl: parseDatabaseUrl(env.DATABASE_URL),
     storageDriver,
     r2: parseR2(env, storageDriver),
-    sitePasscode: parseSitePasscode(env.SITE_PASSCODE, nodeEnv),
-    cookieSecret: parseCookieSecret(env.COOKIE_SECRET, nodeEnv),
     mediaDir: env.MEDIA_DIR?.trim() || path.resolve(import.meta.dirname, '../../work/mp4'),
     publicBaseUrl: parsePublicBaseUrl(env.PUBLIC_BASE_URL, nodeEnv),
   };

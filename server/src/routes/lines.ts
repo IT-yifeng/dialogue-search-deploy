@@ -15,6 +15,7 @@ function parseLineId(raw: string | undefined): number {
 export function createLinesRoutes(service: SearchService, play: PlayService): Hono {
   const app = new Hono();
 
+  // 具体路径必须写在通配 /:id 之前，否则「/123/context」会先被 /:id 当成 id=「123/context」而误匹配
   app.get('/:id/context', async (c) => {
     const id = parseLineId(c.req.param('id'));
     const rule = { min: 0, max: CONTEXT_MAX };
@@ -28,6 +29,14 @@ export function createLinesRoutes(service: SearchService, play: PlayService): Ho
     // 播放链接带有时效，不能被浏览器或中间层缓存，否则过期后还会拿到旧链接
     c.header('Cache-Control', 'no-store');
     return c.json(await play.getPlay(id));
+  });
+
+  // GET /api/lines/:id：单条台词（结构同 search items[]），供前端深链 ?lineId= 在首页拉取
+  app.get('/:id', async (c) => {
+    const id = parseLineId(c.req.param('id'));
+    const line = await service.getLine(id);
+    if (!line) return c.notFound();
+    return c.json(line);
   });
 
   return app;

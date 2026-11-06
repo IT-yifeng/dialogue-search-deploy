@@ -61,8 +61,8 @@ test('robots.txt：直接提供，内容为全部禁止', async () => {
   assert.match(await res.text(), /Disallow: \//);
 });
 
-test('前端路由：/s/:id 与 /gate 刷新时回退到 index.html', async () => {
-  for (const p of ['/s/aB3dE9xZ', '/gate', '/some/deep/route']) {
+test('前端路由：/s/:id 与其它深链刷新时回退到 index.html', async () => {
+  for (const p of ['/s/aB3dE9xZ', '/some/deep/route']) {
     const res = await app.request(p);
     assert.equal(res.status, 200, p);
     assert.match(await res.text(), /spa-shell/, p);

@@ -42,11 +42,20 @@ export interface PlayInfo {
 }
 
 export interface SearchParams {
-  /** 已规范化的关键词，每个词都必须在英文或中文里出现（AND 语义） */
+  /** 已规范化的关键词；默认 AND， loose 模式下用 OR（见 mode） */
   terms: string[];
   season?: number;
   limit: number;
   offset: number;
+  /**
+   * `and`：每个词都要命中；`or`：任一命中即可，用于多词 AND 无结果时的兜底。
+   * 只有一个词时两种写法等价，排序也只依赖整词加权。
+   */
+  mode?: 'and' | 'or';
+  /**
+   * `exact`：整段不切词，terms 仅有 1 个元素，按连续子串匹配；不参与 OR 兜底。
+   */
+  exact?: boolean;
 }
 
 export interface LinesRepo {
@@ -60,6 +69,11 @@ export interface LinesRepo {
    * 排序和“缺了怎么办”都留给 service 决定。
    */
   findByIds(ids: number[]): Promise<SearchHit[]>;
+  /**
+   * 从有视频的台词里均匀随机抽 limit 条。不足 limit 时有多少返回多少。
+   * 每次调用重新抽样，不缓存。
+   */
+  sampleWithVideo(limit: number): Promise<SearchHit[]>;
 }
 
 // 只有以英文字母 / 数字开头和结尾的词才做整词加权：
@@ -101,16 +115,40 @@ export function createLinesRepo(db: Db): LinesRepo {
     async search(p) {
       // 筛选条件的参数必须排在最前，这样 count 查询可以只带这部分参数——
       // Postgres 不允许传入 SQL 里没引用的参数，否则会报“无法确定参数类型”。
+      const mode = p.exact ? 'and' : (p.mode ?? 'and');
       const params: unknown[] = [p.season ?? null];
-      const conds: string[] = ['($1::int IS NULL OR e.season = $1)'];
+      const baseConds: string[] = ['($1::int IS NULL OR e.season = $1)'];
+      const termStartIdx = params.length + 1;
+      const termConds: string[] = [];
       for (const t of p.terms) {
         params.push(`%${escapeLike(t)}%`);
         const i = params.length;
         // ILIKE + trigram 索引：中英文都是子串匹配，不依赖中文分词
-        conds.push(`(l.en ILIKE $${i} ESCAPE '\\' OR l.zh ILIKE $${i} ESCAPE '\\')`);
+        termConds.push(`(l.en ILIKE $${i} ESCAPE '\\' OR l.zh ILIKE $${i} ESCAPE '\\')`);
       }
-      const where = conds.join(' AND ');
+      const termWhere =
+        termConds.length === 0
+          ? 'true'
+          : termConds.length === 1
+            ? termConds[0]!
+            : mode === 'or'
+              ? `(${termConds.join(' OR ')})`
+              : `(${termConds.join(' AND ')})`;
+      const where = [...baseConds, termWhere].join(' AND ');
       const countParams = [...params];
+
+      // OR 且多词时：命中词数越多越好（手册 §6）
+      let matchCountExpr = '0::int';
+      if (mode === 'or' && p.terms.length > 1) {
+        const pieces: string[] = [];
+        for (let ti = 0; ti < p.terms.length; ti++) {
+          const i = termStartIdx + ti;
+          pieces.push(
+            `(CASE WHEN (l.en ILIKE $${i} ESCAPE '\\' OR l.zh ILIKE $${i} ESCAPE '\\') THEN 1 ELSE 0 END)`,
+          );
+        }
+        matchCountExpr = pieces.join(' + ');
+      }
 
       // 排序：英文整词命中的词越多越靠前 → 季 → 集 → 集内序号 → id。
       // 后面几项合起来是全序，翻页时不会出现重复或遗漏。
@@ -123,6 +161,10 @@ export function createLinesRepo(db: Db): LinesRepo {
       // 没有可加权的词时不能写 ORDER BY 0：单独一个整数常量会被 Postgres 当成“第 0 列”而报错，
       // 带上类型转换就变成普通表达式了
       const rankExpr = rank.length > 0 ? rank.join(' + ') : '0::int';
+      const orderPrimary =
+        mode === 'or' && p.terms.length > 1
+          ? `(${matchCountExpr}) DESC, (${rankExpr}) DESC`
+          : `(${rankExpr}) DESC`;
       params.push(p.limit, p.offset);
       const limitIdx = params.length - 1;
       const offsetIdx = params.length;
@@ -135,7 +177,7 @@ export function createLinesRepo(db: Db): LinesRepo {
            FROM lines l
            JOIN episodes e ON e.id = l.episode_id
            WHERE ${where}
-           ORDER BY (${rankExpr}) DESC, e.season, e.episode, l.idx, l.id
+           ORDER BY ${orderPrimary}, e.season, e.episode, l.idx, l.id
            LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
           params,
         ),
@@ -165,6 +207,23 @@ export function createLinesRepo(db: Db): LinesRepo {
          JOIN episodes e ON e.id = l.episode_id
          WHERE l.id = ANY($1::bigint[])`,
         [ids],
+      );
+      return res.rows.map(toHit);
+    },
+
+    async sampleWithVideo(limit) {
+      // ORDER BY random() 对每一行等概率，符合「均匀随机」。
+      // 8 万行规模下对这个只在首页调用一次的接口可以接受；不要换成 TABLESAMPLE，小表上它不均匀。
+      const res = await db.query<SearchRow>(
+        `SELECT l.id, e.season, e.episode, e.title_en, e.title_zh,
+                l.start_ms, l.end_ms, l.en, l.zh,
+                true AS has_video
+         FROM lines l
+         JOIN episodes e ON e.id = l.episode_id
+         WHERE e.video_key IS NOT NULL
+         ORDER BY random()
+         LIMIT $1`,
+        [limit],
       );
       return res.rows.map(toHit);
     },

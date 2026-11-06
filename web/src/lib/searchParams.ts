@@ -1,16 +1,21 @@
-// URL 查询串 ⇄ 搜索状态。URL 是关键词、季、页码的唯一事实来源（手册 §7.5）。
+// URL 查询串 ⇄ 搜索状态。URL 是关键词、季、exact、页码、深链 lineId 的唯一事实来源（手册 §7.5）。
 // 抽成纯函数，是为了不依赖 React Router 也能单测。
 import { MAX_QUERY_LENGTH } from './highlight';
 
 export interface SearchState {
   q: string;
   season?: number;
+  /** 仅完整台词：对应 `exact=1` */
+  exact: boolean;
   page: number;
+  /** 深链：打开片段蒙版定位到该台词 id */
+  lineId?: number;
 }
 
 /** 与后端 page / season 的上限保持一致，超出就当作非法值 */
 const MAX_PAGE = 100_000;
 const MAX_SEASON = 1000;
+const MAX_LINE_ID = Number.MAX_SAFE_INTEGER;
 
 function parsePositiveInt(raw: string | null, max: number): number | undefined {
   // 只接受纯数字：Number('1e2') / Number('0x10') 之类会被 Number() 放行，这里要挡掉
@@ -26,7 +31,9 @@ export function parseSearchState(params: URLSearchParams): SearchState {
   return {
     q,
     season: parsePositiveInt(params.get('season'), MAX_SEASON),
+    exact: params.get('exact') === '1',
     page: parsePositiveInt(params.get('page'), MAX_PAGE) ?? 1,
+    lineId: parsePositiveInt(params.get('lineId'), MAX_LINE_ID),
   };
 }
 
@@ -35,6 +42,8 @@ export function buildSearchParams(state: SearchState): URLSearchParams {
   const params = new URLSearchParams();
   if (state.q !== '') params.set('q', state.q);
   if (state.season !== undefined) params.set('season', String(state.season));
+  if (state.exact) params.set('exact', '1');
   if (state.page > 1) params.set('page', String(state.page));
+  if (state.lineId !== undefined) params.set('lineId', String(state.lineId));
   return params;
 }

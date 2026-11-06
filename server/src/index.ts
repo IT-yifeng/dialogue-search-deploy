@@ -1,4 +1,5 @@
-// 后端入口：创建 Hono 应用，挂载门禁、限流、路由、统一错误处理与前端静态托管。
+// 后端入口：创建 Hono 应用，挂载限流、路由、统一错误处理与前端静态托管。
+// 手册 §4.2：不实现站点口令、gate、POST /api/auth；业务 API 与 /media/* 均匿名可访问。
 import path from 'node:path';
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
@@ -8,17 +9,15 @@ import { errorHandler, notFoundHandler } from './lib/httpError.js';
 import { createEpisodesRepo } from './repos/episodesRepo.js';
 import { createLinesRepo } from './repos/linesRepo.js';
 import { createSharesRepo } from './repos/sharesRepo.js';
-import { createGate, createGateSession } from './middleware/gate.js';
+import { mountApiRateLimits } from './middleware/rateLimit.js';
 import { noindex } from './middleware/noindex.js';
-import { createRateLimit } from './middleware/rateLimit.js';
+import { createDiscoverRoutes } from './routes/discover.js';
 import { createEpisodesRoutes } from './routes/episodes.js';
 import { createLinesRoutes } from './routes/lines.js';
-import { createAuthRoutes } from './routes/auth.js';
 import { createMediaRoutes } from './routes/media.js';
 import { createSearchRoutes } from './routes/search.js';
 import { createSharesRoutes } from './routes/shares.js';
 import { createStaticRoutes } from './routes/static.js';
-import { createAuthService } from './services/authService.js';
 import { createPlayService } from './services/playService.js';
 import { createSearchService } from './services/searchService.js';
 import { createShareService } from './services/shareService.js';
@@ -31,7 +30,7 @@ app.onError(errorHandler);
 app.notFound(notFoundHandler);
 app.use('*', noindex);
 
-// 健康检查：部署平台用它判断服务是否存活，也不需要门禁
+// 健康检查：部署平台用它判断服务是否存活
 app.get('/healthz', (c) => c.json({ ok: true }));
 
 // 依赖在这里自上而下组装：db → repos → service → routes
@@ -56,21 +55,15 @@ const shareService = createShareService({
   publicBaseUrl: config.publicBaseUrl,
 });
 
-// 门禁必须在所有业务路由之前注册；免口令白名单在 gate 内部维护（手册 §6）
-const auth = createAuthService({ passcode: config.sitePasscode, cookieSecret: config.cookieSecret });
-const gateSession = createGateSession(auth, { secret: config.cookieSecret, secure: config.nodeEnv === 'production' });
-const gate = createGate(gateSession);
-app.use('/api/*', gate);
-app.use('/media/*', gate);
-// 每 IP 每分钟 10 次（手册 §6），防止暴力猜口令
-app.use('/api/auth', createRateLimit({ windowMs: 60_000, max: 10 }));
-app.route('/api/auth', createAuthRoutes(auth, gateSession));
+// 限流要挂在业务路由之前，超限请求不再打到数据库
+mountApiRateLimits(app);
 
 app.route('/api/search', createSearchRoutes(searchService));
+app.route('/api/discover', createDiscoverRoutes(searchService));
 app.route('/api/lines', createLinesRoutes(searchService, playService));
 app.route('/api/episodes', createEpisodesRoutes(searchService));
 app.route('/api/shares', createSharesRoutes(shareService));
-// 本地开发的视频文件服务（线上用 R2 驱动，不挂载；上面的门禁已经覆盖 /media/*）
+// 本地开发的视频文件服务（线上用 R2 驱动，不挂载）
 if (localDriver) app.route('/media', createMediaRoutes(localDriver));
 
 // 前端静态文件放在最后：所有 API 与 /media 路由先匹配，剩下的才回退到页面。

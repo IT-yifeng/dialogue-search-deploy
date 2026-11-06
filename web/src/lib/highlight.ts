@@ -30,6 +30,16 @@ export function splitTerms(q: string): string[] {
   return terms;
 }
 
+/**
+ * 高亮用关键词：`exact` 时整段不切词（与后端 `exact=1` 一致）。
+ */
+export function splitTermsForHighlight(q: string, exact: boolean): string[] {
+  const trimmed = q.trim();
+  if (trimmed === '') return [];
+  if (exact) return [trimmed];
+  return splitTerms(q);
+}
+
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

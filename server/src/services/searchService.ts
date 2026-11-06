@@ -10,20 +10,25 @@ export const MAX_QUERY_LENGTH = 50;
 export const MAX_TERMS = 5;
 
 export const CONTEXT_MAX = 5;
+/** 首页推荐条数（手册 §6 GET /api/discover） */
+export const DISCOVER_LIMIT = 9;
 
-/**
- * 把用户输入拆成关键词：按空白切分（含全角空格）、去重（忽略大小写）、最多取前 MAX_TERMS 个。
- * 输入为空或超长会抛 400。长度按“字符”而不是 UTF-16 码元计，避免 emoji 被算成两个。
- */
-export function normalizeQuery(q: string): string[] {
-  const trimmed = q.trim();
+function validateQueryLength(trimmed: string): void {
   if (trimmed === '') throw badRequest('q 不能为空');
   if (Array.from(trimmed).length > MAX_QUERY_LENGTH) {
     throw badRequest(`q 最长 ${MAX_QUERY_LENGTH} 个字符`);
   }
+}
+
+/**
+ * 把用户输入拆成关键词：按空白切分（含全角空格）、去重（忽略大小写）、最多取前 MAX_TERMS 个。
+ * 长度校验交给 validateQueryLength；空串会抛 400。
+ */
+export function splitTermsFromQuery(trimmed: string): string[] {
   const seen = new Set<string>();
   const terms: string[] = [];
   for (const t of trimmed.split(/\s+/)) {
+    if (t === '') continue;
     const key = t.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
@@ -33,9 +38,20 @@ export function normalizeQuery(q: string): string[] {
   return terms;
 }
 
+/**
+ * 普通搜索用的分词（与前端 splitTerms 规则一致）。
+ */
+export function normalizeQuery(q: string): string[] {
+  const trimmed = q.trim();
+  validateQueryLength(trimmed);
+  return splitTermsFromQuery(trimmed);
+}
+
 export interface SearchInput {
   q: string;
   season?: number;
+  /** `exact=1`：不切词，整段连续匹配（手册 §6） */
+  exact?: boolean;
   page: number;
   pageSize: number;
 }
@@ -44,6 +60,8 @@ export interface SearchResult {
   total: number;
   page: number;
   pageSize: number;
+  /** 多词 AND 无结果时放宽为 OR 时为 true（exact 模式永为 false） */
+  relaxed: boolean;
   items: SearchHit[];
 }
 
@@ -53,23 +71,76 @@ export interface ContextResult {
   lines: ContextLine[];
 }
 
+export interface DiscoverResult {
+  items: SearchHit[];
+}
+
 export interface SearchService {
   search(input: SearchInput): Promise<SearchResult>;
+  /** 有视频的台词中随机抽 DISCOVER_LIMIT 条；库存不足时少返回，不报错 */
+  discover(): Promise<DiscoverResult>;
+  /** 按 id 取一条台词（深链 `?lineId=` 用）；不存在返回 null */
+  getLine(id: number): Promise<SearchHit | null>;
   getContext(id: number, before: number, after: number): Promise<ContextResult>;
   listEpisodes(): Promise<EpisodeListItem[]>;
 }
 
 export function createSearchService(lines: LinesRepo, episodes: EpisodesRepo): SearchService {
   return {
-    async search({ q, season, page, pageSize }) {
-      const terms = normalizeQuery(q);
-      const { total, items } = await lines.search({
-        terms,
-        season,
-        limit: pageSize,
-        offset: (page - 1) * pageSize,
-      });
-      return { total, page, pageSize, items };
+    async search({ q, season, page, pageSize, exact }) {
+      const trimmed = q.trim();
+      validateQueryLength(trimmed);
+
+      const limit = pageSize;
+      const offset = (page - 1) * pageSize;
+
+      if (exact) {
+        const { total, items } = await lines.search({
+          terms: [trimmed],
+          season,
+          limit,
+          offset,
+          mode: 'and',
+          exact: true,
+        });
+        return { total, page, pageSize, relaxed: false, items };
+      }
+
+      const terms = splitTermsFromQuery(trimmed);
+      const base = { season, limit, offset, exact: false as const };
+
+      // 只有一词时 AND / OR 等价，直接一次查询即可
+      if (terms.length <= 1) {
+        const { total, items } = await lines.search({
+          ...base,
+          terms,
+          mode: 'and',
+        });
+        return { total, page, pageSize, relaxed: false, items };
+      }
+
+      const strict = await lines.search({ ...base, terms, mode: 'and' });
+      if (strict.total > 0) {
+        return { total: strict.total, page, pageSize, relaxed: false, items: strict.items };
+      }
+
+      const loose = await lines.search({ ...base, terms, mode: 'or' });
+      return {
+        total: loose.total,
+        page,
+        pageSize,
+        relaxed: loose.total > 0,
+        items: loose.items,
+      };
+    },
+
+    async discover() {
+      return { items: await lines.sampleWithVideo(DISCOVER_LIMIT) };
+    },
+
+    async getLine(id) {
+      const rows = await lines.findByIds([id]);
+      return rows[0] ?? null;
     },
 
     async getContext(id, before, after) {

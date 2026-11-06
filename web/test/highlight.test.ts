@@ -1,6 +1,6 @@
 // 样例文本均为自编，不含真实台词（项目规则：版权素材不进代码与测试）。
 import { describe, expect, it } from 'vitest';
-import { highlightSegments, splitTerms } from '../src/lib/highlight';
+import { highlightSegments, splitTerms, splitTermsForHighlight } from '../src/lib/highlight';
 
 describe('splitTerms', () => {
   it('按空白切分，含全角空格', () => {
@@ -17,6 +17,16 @@ describe('splitTerms', () => {
 
   it('空输入返回空数组', () => {
     expect(splitTerms('   ')).toEqual([]);
+  });
+});
+
+describe('splitTermsForHighlight', () => {
+  it('exact 时整段不切词', () => {
+    expect(splitTermsForHighlight('a b c', true)).toEqual(['a b c']);
+  });
+
+  it('非 exact 与 splitTerms 一致', () => {
+    expect(splitTermsForHighlight('foo bar', false)).toEqual(['foo', 'bar']);
   });
 });
 

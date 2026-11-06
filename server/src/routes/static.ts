@@ -30,7 +30,7 @@ export function createStaticRoutes(dir: string): Hono | null {
   });
   app.use('*', serveStatic({ root }));
 
-  // SPA 回退：/s/xxx、/gate 这类前端路由在服务器上没有对应文件，刷新页面时要返回 index.html，交给前端路由处理
+  // SPA 回退：/s/xxx 等前端路由在服务器上没有对应文件，刷新页面时要返回 index.html，交给前端路由处理
   app.get('*', async (c) => {
     const p = c.req.path;
     const last = p.split('/').at(-1) ?? '';

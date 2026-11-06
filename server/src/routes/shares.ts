@@ -1,8 +1,6 @@
 // POST /api/shares、GET /api/shares/:id、GET /api/shares/:id/lines/:lineId/play。
 // 只做参数校验与返回格式，业务交给 shareService。
-//
-// 门禁约定（M6 接入 gate 中间件时遵守）：
-//   POST 需要口令；两个 GET 免口令，凭分享链接访问（手册 §6）。
+// 手册 §6：业务 API 匿名可调用；分享 GET 凭短链访问（限流在 M6/M7）。
 import { Hono } from 'hono';
 import { badRequest, notFound } from '../lib/httpError.js';
 import { parseOptionalInt } from '../lib/queryParams.js';

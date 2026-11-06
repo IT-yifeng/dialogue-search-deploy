@@ -13,3 +13,8 @@ export function formatTime(ms: number): string {
 export function formatEpisodeCode(season: number, episode: number): string {
   return `S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')}`;
 }
+
+/** 设计稿角标：S02 · E05 */
+export function formatSeasonEpisodeLabel(season: number, episode: number): string {
+  return `S${String(season).padStart(2, '0')} · E${String(episode).padStart(2, '0')}`;
+}

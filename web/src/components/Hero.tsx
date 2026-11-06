@@ -1,5 +1,10 @@
+import { useQuery } from '@tanstack/react-query';
+import type { SearchItem } from '../api/types';
+import { fetchDiscover } from '../api/search';
 import { FilmIcon, LanguagesIcon, LayersIcon, SparkIcon } from './icons';
+import { DiscoverGrid } from './DiscoverGrid';
 import { SearchBar } from './SearchBar';
+import type { LangMode } from '../lib/displayLines';
 
 // 示例词带语种标注：告诉用户中英文都能搜，点击即搜。
 // 选的是库里确定有结果的词，避免首页第一次点击就看到“没有找到”。
@@ -19,10 +24,22 @@ const FEATURES = [
 interface Props {
   value: string;
   onSubmit: (q: string) => void;
+  mode: LangMode;
+  highlightTerms: string[];
+  /** 第三个参数是当次拿到的 9 条列表，避免父组件再拉一遍 discover */
+  onDiscoverPick: (line: SearchItem, index: number, items: SearchItem[]) => void;
 }
 
-/** 空搜索时的首页：不请求接口，只负责引导用户输入或点示例词 */
-export function Hero({ value, onSubmit }: Props) {
+/** 空搜索时的首页：不请求列表接口，引导输入；同时请求 discover 填满 9 张推荐卡（手册 §7.2） */
+export function Hero({ value, onSubmit, mode, highlightTerms, onDiscoverPick }: Props) {
+  // 手册 §6：discover 每次请求重新抽样；首页不能只展示缓存，否则刷新也看不到新推荐
+  const discover = useQuery({
+    queryKey: ['discover'],
+    queryFn: ({ signal }) => fetchDiscover(signal),
+    staleTime: 0,
+    gcTime: 0,
+  });
+
   return (
     <section className="mx-auto max-w-2xl pb-10 pt-8 text-center sm:pt-16">
       <span className="inline-flex animate-fade-up items-center gap-1.5 rounded-pill border border-brand-fg/30 bg-surface/70 px-3 py-1 text-xs font-semibold text-brand-fg backdrop-blur">
@@ -71,6 +88,17 @@ export function Hero({ value, onSubmit }: Props) {
           </li>
         ))}
       </ul>
+
+      {discover.isError ? null : discover.data && discover.data.items.length > 0 ? (
+        <DiscoverGrid
+          lines={discover.data.items}
+          mode={mode}
+          terms={highlightTerms}
+          onPick={(line, i) => onDiscoverPick(line, i, discover.data!.items)}
+        />
+      ) : discover.isPending ? (
+        <div className="mt-14 h-40 animate-pulse rounded-card bg-surface-muted" aria-hidden />
+      ) : null}
     </section>
   );
 }

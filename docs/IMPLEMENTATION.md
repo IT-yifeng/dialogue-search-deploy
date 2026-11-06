@@ -15,9 +15,9 @@
 |---|---|
 | 关键词搜索（中英混搜、多词 AND、按季筛选、分页、高亮） | 模糊语义搜索、拼写纠错 |
 | 中 / 英 / 双语显示切换 | 其他语言 |
-| 点击播放台词前后片段，可展开上下文 | 视频下载、GIF、海报图 |
+| 点击播放台词前后片段，可展开上下文；首页空态与搜索列表可展示**片段配图**（封面底图 + 季集角标 + 中英字幕），均取自视频取帧 | 视频下载、GIF、海报图（不含设计稿里「片段卡」这种体验） |
 | 跨搜索勾选（最多 20 条）、生成分享链接、复制文本 | 账号体系、收藏夹、评论 |
-| 站点口令门禁（保护版权素材） | 公开运营、广告、支付 |
+| **不设**站点口令与登录门槛：所有页面与业务 API（含搜索、播放、discover、`/media`）**匿名即可访问**（见 §4.2）；以降低被发现概率，仍依赖 R2 私有桶 + `noindex` / `robots.txt`（不当作访问控制） | 公开运营、广告、支付 |
 | 分享页只读并可播放 | 分享统计看板 |
 | 精确短语开关、空结果弱相关兜底、复制文本自带出处 | 搜索联想、拼音 / 繁简容错、图文梗卡（取帧见可选的 M8） |
 
@@ -55,14 +55,13 @@ dialogue_search/
 │  │  ├─ config.ts           # 读取并校验环境变量（缺失就启动失败，避免线上才发现）
 │  │  ├─ routes/             # 路由层：只做参数校验与返回格式，不写业务
 │  │  │  ├─ search.ts        # GET /api/search
+│  │  │  ├─ discover.ts      # GET /api/discover：9 条有视频的随机台词
 │  │  │  ├─ lines.ts         # GET /api/lines/:id/context、/play
 │  │  │  ├─ episodes.ts      # GET /api/episodes
 │  │  │  ├─ media.ts         # GET/HEAD /media/*：仅本地开发（STORAGE_DRIVER=local），支持 Range
 │  │  │  ├─ shares.ts        # POST /api/shares、GET /api/shares/:id、GET /api/shares/:id/lines/:lineId/play
-│  │  │  ├─ auth.ts          # POST /api/auth（口令换 cookie）
 │  │  │  └─ static.ts        # 托管前端静态文件，SPA 回退到 index.html（目录不存在则不挂载）
 │  │  ├─ services/           # 业务层：组合仓储与存储，含排序、限额等规则
-│  │  │  ├─ authService.ts   # 口令校验、门禁 cookie 的签发与验证（gate 与 routes/auth 共用）
 │  │  │  ├─ searchService.ts
 │  │  │  ├─ playService.ts   # 计算片段起止、签发播放 URL
 │  │  │  └─ shareService.ts  # 生成短 ID、校验数量上限
@@ -75,8 +74,7 @@ dialogue_search/
 │  │  │  ├─ localDriver.ts
 │  │  │  └─ r2Driver.ts
 │  │  ├─ middleware/
-│  │  │  ├─ gate.ts          # 口令门禁：校验签名 cookie
-│  │  │  └─ rateLimit.ts     # 内存限流（单实例够用）
+│  │  │  └─ rateLimit.ts     # M6：内存限流（单实例够用；按 IP / 路径，与「无口令」并存）
 │  │  ├─ db/
 │  │  │  ├─ client.ts        # Postgres 连接池
 │  │  │  ├─ migrate.ts       # 迁移执行器（npm run db:migrate，M1 引入，走直连地址）
@@ -107,9 +105,10 @@ dialogue_search/
 │  ├─ src/
 │  │  ├─ main.tsx、App.tsx、routes.tsx
 │  │  ├─ api/                # fetch 封装 + 类型（与 §6 契约一一对应）
-│  │  ├─ pages/              # SearchPage / SharePage / GatePage / NotFound
-│  │  ├─ components/         # SearchBar / FilterBar / LangToggle / ResultCard /
-│  │  │                      # ClipPlayer / ContextDrawer / SelectionBar / ShareDialog
+│  │  ├─ pages/              # SearchPage / SharePage / NotFound（不单独做 GatePage）
+│  │  ├─ components/         # SearchBar / FilterBar / LangToggle / DiscoverGrid /
+│  │  │                      # ResultCard / ClipPlayer / ContextDrawer / SearchResultOverlay /
+│  │  │                      # SelectionBar / ShareDialog
 │  │  ├─ hooks/              # useSearchParamsState / useClipPlayer
 │  │  ├─ store/selection.ts  # Zustand：已勾选台词（跨搜索保留）
 │  │  ├─ store/player.ts     # Zustand：当前播放中的台词 ID（保证同时只有一个播放器）
@@ -203,7 +202,7 @@ async function playClip(video: HTMLVideoElement, startMs: number, endMs: number)
 
 1. **不入 git。** `raw/`、`work/` 写进 `.gitignore`，字幕和视频都不能进仓库。
 2. **私有存储桶。** R2 桶不开公开访问，只通过 API 签发短期预签名链接。
-3. **站点门禁。** 全站设口令（§8.3），页面加 `<meta name="robots" content="noindex">`，同时在 `robots.txt` 里全部禁止收录。
+3. **不设登录/口令门槛（单人自用、知道站点 URL 即可用）。** **不实现** `POST /api/auth`、`SITE_PASSCODE`、`COOKIE_SECRET`、`GatePage` / `gate` 门禁：**所有**业务 API（搜索、上下文、播放、discover、分享写入等）以及本地开发时的 `/media/*` **均不要求** cookie 或前置认证。实际防护依赖：① **R2 桶私有**，成片只能通过预签名 URL 访问；② 站点仅自分发的域名可达、URL 不公开扩散；③ 全站 `<meta name="robots" content="noindex">` + `robots.txt` 全部 `Disallow`，**降低被搜索引擎收录的概率**（不是访问控制，防不住直接访问）。生产环境用 **M6 / M7 的按 IP 限流**缓解扫接口与滥用（见 `middleware/rateLimit.ts`）。
 4. **只做个人、小圈子自用。** 一旦要公开运营，必须先解决授权，这是产品决策，不是技术问题。
 5. **出处与下架通道。** 复制和分享的文本默认附带出处（片名、季集、时间点），且不可关闭；页脚和分享页放「权利声明 / 投诉」联系方式（一个邮箱即可），收到通知后 48 小时内处理。（对应 FeatureList F4.6、F8.3）
 
@@ -315,18 +314,19 @@ CREATE TABLE shares (
 
 ## 6. API 契约
 
-所有接口返回 JSON，错误统一为 `{ "error": { "code": "...", "message": "..." } }`。除 `/api/auth`、`/healthz` 外都要通过门禁（分享相关接口的例外见下表）。
+所有接口返回 JSON，错误统一为 `{ "error": { "code": "...", "message": "..." } }`。**不设**站点口令：`/healthz` 之外的**全部**业务 API 均匿名可调用（依赖 §4.2 的其它约束 + M6/M7 限流防滥用）。
 
 | 接口 | 说明 | 要点 |
 |---|---|---|
-| `POST /api/auth` | 请求 `{passcode}`，成功返回 200 `{ok: true}` 并写入签名 cookie `ds_gate`（30 天，HttpOnly，`SameSite=Lax`，生产环境加 `Secure`） | 口令错误 401 `INVALID_PASSCODE`；请求体不合法 400；限流每 IP 每分钟 10 次，超限 429 `RATE_LIMITED` 并带 `Retry-After` |
 | `GET /api/search` | `q`（必填）、`season`、`exact`（`1` 表示仅完整台词）、`page`（默认 1）、`pageSize`（默认 20，最大 50） | 见下方返回结构 |
+| `GET /api/lines/:id` | 无额外参数 | 返回单条台词，**JSON 与 `GET /api/search` 的 `items[]` 单项同形**；供深链 `?lineId=` 在首页拉取；不存在返回 404 `NOT_FOUND` |
 | `GET /api/lines/:id/context` | `before`、`after`（各默认 2，最大 5） | 返回同集前后台词，含本条 |
 | `GET /api/lines/:id/play` | 返回播放用 URL 与起止 | 有视频才返回；URL 有效期 1 小时 |
 | `GET /api/episodes` | 季集列表（筛选器用） | 可缓存 |
-| `POST /api/shares` | 请求 `{lineIds: number[], note?: string}` | 1～20 条；返回 201 `{id, url}`；需要门禁 |
-| `GET /api/shares/:id` | **无需口令**，凭链接访问 | 返回留言与台词列表（不含播放 URL）；每次成功读取 `view_count + 1`；限流（M7） |
-| `GET /api/shares/:id/lines/:lineId/play` | **无需口令** | 仅当 `lineId` 属于该分享才签发播放 URL，返回结构与 `/api/lines/:id/play` 相同；不计浏览量；限流（M7） |
+| `GET /api/discover` | 无查询参数 | 返回 **9** 条随机推荐台词（结构同 `search` 的 `items[]` 单项），仅供首页空态「Discover」区使用；每次请求重新抽样 |
+| `POST /api/shares` | 请求 `{lineIds: number[], note?: string}` | 1～20 条；返回 201 `{id, url}`；需通过限流（M6/M7） |
+| `GET /api/shares/:id` | 凭链接访问 | 返回留言与台词列表（不含播放 URL）；每次成功读取 `view_count + 1`；限流（M7） |
+| `GET /api/shares/:id/lines/:lineId/play` | 分享上下文内播放 | 仅当 `lineId` 属于该分享才签发播放 URL，返回结构与 `/api/lines/:id/play` 相同；不计浏览量；限流（M7） |
 
 ```jsonc
 // POST /api/shares  请求
@@ -351,7 +351,7 @@ CREATE TABLE shares (
 
 - `lineIds`：数组，每项为正的安全整数，1～20 条；重复项去重并保留首次出现的位置；任一 id 不存在返回 400 `BAD_REQUEST`。`note` 去首尾空白后最长 100 个字符，空串按无留言处理。请求体不是合法 JSON 或字段类型不对，返回 400。
 - 分享里的台词若在语料重灌后已不存在，读取时直接略过；全部不存在返回 404 `NOT_FOUND`。
-- 为什么不在 `GET /api/shares/:id` 里直接带播放 URL：免口令的分享链接只应能签发所选台词的播放地址，且点播放时才签发，避免每次打开页面都为每集查询存储。
+- 为什么不在 `GET /api/shares/:id` 里直接带播放 URL：分享链接只应能签发所选台词的播放地址，且点播放时才签发，避免每次打开页面都为每集查询存储。
 
 ```jsonc
 // GET /api/search?q=bazinga&season=2
@@ -365,6 +365,18 @@ CREATE TABLE shares (
     "en": "Bazinga!", "zh": "巴辛嘎！",
     "hasVideo": true
   }]
+}
+```
+
+```jsonc
+// GET /api/lines/12345
+// 响应与上表 search items[] 单项同形
+{
+  "id": 12345,
+  "episode": { "season": 2, "episode": 5, "titleEn": "...", "titleZh": "..." },
+  "startMs": 123400, "endMs": 125900,
+  "en": "Bazinga!", "zh": "巴辛嘎！",
+  "hasVideo": true
 }
 ```
 
@@ -390,7 +402,7 @@ CREATE TABLE shares (
 }
 ```
 
-- 门禁：受保护的接口（`/api/*` 与本地 `/media/*`）没有有效 cookie 时返回 401 `UNAUTHORIZED`。免口令白名单只有：`/healthz`、`POST /api/auth`、`GET /api/shares/:id`、`GET /api/shares/:id/lines/:lineId/play`。cookie 的内容绑定当前口令，修改 `SITE_PASSCODE` 或 `COOKIE_SECRET` 会让已发出的 cookie 全部失效。静态页面（HTML / JS / CSS）不受门禁，前端靠接口 401 跳转 `/gate`。
+- **无「站点级」401**：业务错误仍用 4xx（如参数不对 `400`、资源不存在 `404`）；**不出现**因「未登录」导致的 `401 UNAUTHORIZED`。
 - 参数不合法（`q` 为空或超过 50 字符、`season` / `page` / `pageSize` / `before` / `after` 越界或非整数）返回 400 `BAD_REQUEST`；台词不存在返回 404 `NOT_FOUND`。
 - `q` 按空白切成多个词（AND 语义），去重后最多取前 5 个词。
 - `exact=1`：不拆词，把整个 `q`（去掉首尾空白）当作一个连续片段匹配，解决「词太多、结果爆炸、无法收紧」的问题。`exact` 参数非 `1` 或缺省都按默认处理。
@@ -411,14 +423,15 @@ CREATE TABLE shares (
 
 | 路由 | 页面 | 说明 |
 |---|---|---|
-| `/gate` | 口令页 | 未登录访问任何页面都跳到这里 |
-| `/` | 搜索页（主页面） | 搜索、结果、勾选、分享入口 |
-| `/s/:id` | 分享页 | 只读，免口令 |
+| `/` | 搜索页（主页面） | **默认落地页**（§4.2）；搜索、结果、勾选、分享入口；业务 API 无口令，不出现「整页登录」 |
+| `/s/:id` | 分享页 | 只读 |
 | `*` | 404 | 含「分享已失效」文案 |
 
 ### 7.2 搜索页结构
 
-**空态（无关键词）是 hero 首页**：顶栏只有 logo、语言切换、主题切换；中央依次是胶囊标签、大标题、副标题、大号搜索框（主按钮嵌在右侧）、带语种标注的示例词胶囊、三项能力简介。有关键词后变为下面的结果页，搜索框收进吸顶顶栏。
+**空态（无关键词）是 hero 首页**：顶栏只有 logo、语言切换、主题切换；中央依次是胶囊标签、大标题、副标题、大号搜索框（主按钮嵌在右侧）、带语种标注的示例词胶囊、三项能力简介。**其下为「随机推荐」区**（设计稿 `06-discovery-grid`）：共 **9** 张片段卡，排成响应式网格（桌面端多为 3×3）。每张卡以该台词对应时刻的**视频截图**为底图（见 §7.9）；**左上角**叠放角标，标明所属 **季** 与 **集**（文案格式如 `S02 · E05`，与《生活大爆炸》一一对应）；**卡片下方中央**叠放该行台词的**英文与中文**（与语言切换联动：可仅英、仅中或双语）。数据来自 `GET /api/discover`；进入页面时拉取一次即可，不要求无限滚动。
+
+有关键词后变为下面的结果页，搜索框收进吸顶顶栏；列表形态见 §7.3「结果列表形态」（可与 `03` 一致，或采用与 `06` 同构的配图卡片）。
 
 ```
 ┌────────────────────────────────────────────┐
@@ -436,12 +449,16 @@ CREATE TABLE shares (
         已选 3 条 [预览/分享] [清空]   ← 底部悬浮条，有勾选才出现
 ```
 
+**带关键词时的结果页（列表 + 片段蒙版，设计稿 `07-search-result-overlay`）**：用户点击某条**搜索结果**（卡片任意可点区域或明确的「查看片段」入口）后，在当前页面上方打开**全屏或近全屏蒙版**。蒙版内展示该片段：与 `06` 相同，以**截图底图 + 季集角标 + 下方中英字幕**为主视觉；底部或两侧提供 **「上一条」「下一条」**，在**当前搜索结果列表**（当前页的 `items`，含分页语义：最后一条的「下一条」可翻页并选中下一页第一条，或禁用并在旁提示「下一页」——实现时二选一，需在 PR 里写清）中顺序切换；另提供 **「复制链接」**（设计稿上若写作「赋值链接」，同此）：将**当前正在查看的这一条台词**复制为可分享的站点链接。链接形态约定为 `PUBLIC_BASE_URL` + `/?lineId=<id>`（或等价 query），打开后由前端解析并自动拉起同一片段蒙版并定位到该条。后端可不新增接口：`POST /api/shares` 仍是「多选生成分享页」；此处是**单条Deep link**，仅前端路由与可选的 `lineId` 查询参数。
+
 ### 7.3 交互细节
 
 | 场景 | 行为 |
 |---|---|
 | 提交搜索 | 回车或点按钮；URL 同步为 `/?q=...&season=...&exact=1&page=...`，可刷新、可分享、可回退 |
-| 空搜索 | 不请求；显示热门示例词（如 Bazinga、Penny、Sheldon），点击即搜 |
+| 空搜索 | 不请求列表接口；显示热门示例词（如 Bazinga、Penny、Sheldon），点击即搜；同时请求 `GET /api/discover` 填满 9 张推荐卡（失败时该区域显示占位或隐藏，不出现整页白屏） |
+| 推荐卡点击 | 与搜索结果的片段蒙版一致：打开蒙版，默认定位到该条，可在蒙版内用「上一条 / 下一条」浏览（此时「下一条」在 9 条推荐集合内循环或到达末尾禁用，实现时二选一并在 PR 说明） |
+| 搜索结果 → 片段蒙版 | 点击结果行打开蒙版（见 §7.2 `07`）；**上一条 / 下一条**仅在当前搜索结果序列中移动；**复制链接**复制当前条的 `?lineId=` 深链 |
 | 无结果 | 提示「没有找到」，附带建议：少写几个词、换成中文或英文；永不出现空白页（乱码输入也要在 600ms 内给出提示或兜底结果） |
 | 弱相关兜底 | 接口返回 `relaxed: true` 时，列表顶部显示一条提示：「没有同时包含全部关键词的台词，下面是包含部分词的结果」 |
 | 仅完整台词 | 搜索栏旁一个开关，开启后加 `exact=1`；结果是默认结果的子集。结果数超过 2000 条时，在结果顶部提示「结果较多，试试仅完整台词」 |
@@ -455,7 +472,9 @@ CREATE TABLE shares (
 | 复制文本格式 | 每条三行：英文、中文、`—— 《片名》S02E05 12:03`（片名取自前端常量 `SERIES_TITLE`，目前只有一部剧，不改表）。**出处行不可关闭** |
 | 分享页 | 展示留言与台词列表，每条可播放；底部有「去搜索更多」 |
 | 加载与错误 | 搜索中显示骨架屏；接口失败显示可重试的错误条；播放链接过期（403）时自动重新请求一次 |
-| 移动端 | 单列；分享对话框改为底部抽屉；播放器宽度撑满 |
+| 移动端 | 单列；分享对话框改为底部抽屉；播放器宽度撑满；`DiscoverGrid` 为 2 列或 1 列；片段蒙版占满视口，按钮区避免被安全区遮挡 |
+
+| 结果列表形态 | **有关键词时**：允许采用与 `03-result-card` 一致的信息密度，或采用与 `06` / `07` 一致的「配图卡片」列表；**配图**统一走 §7.9 的取帧规则。若某条无视频或取帧失败，卡片降级为纯色底 + 季集角标 + 字幕 |
 
 ### 7.4 数据流
 
@@ -489,7 +508,9 @@ sequenceDiagram
 | 状态 | 位置 | 说明 |
 |---|---|---|
 | 关键词、季、exact、页码 | **URL**（唯一事实来源） | 用 `useSearchParams` 读写 |
-| 搜索结果、上下文、分享详情 | TanStack Query | 自动缓存、重试 |
+| 可选：`lineId` | **URL** | 深链打开片段蒙版时用；与 `q` 可同时存在（从分享链回到搜索上下文） |
+| 搜索结果、上下文、分享详情、推荐列表 | TanStack Query | 自动缓存、重试；`discover` 单独 query key |
+| 片段蒙版：当前索引、是否打开 | Zustand 或 URL + 派生 | 蒙版内「上一条 / 下一条」依赖当前列表（搜索结果页 items 或 discover 的 9 条） |
 | 已勾选台词 | Zustand + `sessionStorage` | 存完整台词对象，分享对话框无需再请求 |
 | 语言模式 | Zustand + `localStorage` | |
 | 当前播放中的台词 ID | Zustand | 保证同时只有一个播放器 |
@@ -501,9 +522,11 @@ sequenceDiagram
 | `SearchBar` | `value`、`onSubmit` | 输入与提交，不请求数据 |
 | `FilterBar` | `season`、`exact`、`total` | 季筛选、「仅完整台词」开关、结果数文案 |
 | `LangToggle` | — | 读写语言模式 |
+| `DiscoverGrid` | `lines[]`（来自 discover） | 渲染 9 宫格推荐卡；每卡触发打开 `SearchResultOverlay` |
 | `ResultCard` | `line`、`mode` | 展示台词、复选框、播放与上下文按钮 |
 | `ClipPlayer` | `lineId` | 请求播放信息、渲染 `<video>`、到点暂停 |
 | `ContextDrawer` | `lineId` | 展示前后台词 |
+| `SearchResultOverlay` | `lines[]`、`initialIndex`、`onClose` | 蒙版内导航、复制单条深链；内部用隐藏的 `ClipPlayer` 或 `<video>` 供 §7.9 取帧 |
 | `SelectionBar` | — | 悬浮条，显示数量与入口 |
 | `ShareDialog` | — | 预览已选、生成链接、复制 |
 
@@ -518,13 +541,16 @@ sequenceDiagram
 | `03-result-card.png` | 结果卡片（普通、勾选、播放展开三种状态） |
 | `04-share-dialog.png` | 分享对话框 |
 | `05-share-page.png` | 分享页 |
-| `06-gate.png` | 口令页 |
+| `06-discovery-grid.png` | 空态首页：随机推荐 **9** 个片段；截图底图 + 左上角季集角标 + 底部中英字幕 |
+| `07-search-result-overlay.png` | 搜索有结果时：点击片段后以蒙版展示，支持上一条 / 下一条切换、复制链接 |
+
+> 仓库里若仍使用 `06.png`、`07.png` 等短文件名，在提示词里 `@docs/design/06.png` 即可；上表为推荐命名，便于区分后续补充稿（若日后增加 `08-xxx.png` 等）。
 
 拿到稿子后，先让 AI 提取「设计令牌」写进 `tailwind.config.ts`：主色、背景色、文字色、字号层级、圆角、间距。初始令牌值见 §7.8，与设计稿不一致的以设计稿为准。然后再做组件，不要边做组件边猜颜色。如果设计稿与本节的交互冲突，**以设计稿为准**，并更新本节。
 
 ### 7.8 设计令牌与视觉规则（青色清新方向）
 
-> **变更说明**：`docs/design/` 的参考图（01 为 33台词，02～05 为 Yarn）都是高饱和、偏年轻的风格，与 FeatureList §B 的「莫兰迪 + 陶土橙」冲突。按 §7.7「以设计稿为准」，视觉方向改为**青色清新**；FeatureList §B 不再作为视觉依据。02～05 的缩略图卡片墙、片段详情页、分享页形态分别属于后续里程碑，当前不实现。
+> **变更说明**：`docs/design/` 的参考图（01 为 33台词，02～05 为 Yarn）都是高饱和、偏年轻的风格，与 FeatureList §B 的「莫兰迪 + 陶土橙」冲突。按 §7.7「以设计稿为准」，视觉方向改为**青色清新**；FeatureList §B 不再作为视觉依据。`06` / `07` 的**片段配图 + 蒙版导航**纳入 MVP（见 §7.9）；`02`～`05` 若与当前令牌冲突，以各图为准迭代 §7.8。
 
 风格：近白偏冷的底色 + 细网格与顶部光晕，一个青色品牌色，圆润胶囊，两级柔和阴影。令牌写在 `tailwind.config.ts`，取值以 CSS 变量形式放在 `index.css`，亮 / 暗两套同名，组件里只引用语义名，不写死颜色。
 
@@ -555,7 +581,16 @@ sequenceDiagram
 - 品牌色只承担「主操作 + 当前状态」：搜索按钮、播放键、选中态、命中词高亮；其余层级用描边与灰度区分。
 - `glow` 不能做文字色（对比度不够）；品牌色文字一律用 `brand-fg`。
 - 命中词高亮为「荧光笔」式半透明下划线底，文字颜色不变，亮暗模式通用。
-- 保持 §7.2 的列表形态：缩略图卡片墙依赖预抽帧，MVP 没有，不采用。
+- 片段卡片的**暗角与字幕条**需保证 WCAG 对比度（字幕描边或半透明底条二选一），具体数值以对 `06` / `07` 还原为准。
+
+### 7.9 片段截图（Discover / 蒙版共用）
+
+设计稿 `06`、`07` 的底图来自**台词对应时刻的视频画面**，不是单独海报素材。
+
+- **时刻**：在台词起止的中点取一帧：\((startMs + endMs) / 2\)，单位毫秒；与管线里的时间轴一致。
+- **实现顺序**：先用隐藏 `<video>` + `canvas` 同当前 `/api/lines/:id/play` 流程取帧（与 M8「导出截图」同源技巧）；生产环境需 R2 视频 CORS（§M8）；本地 `localDriver` 同源无 CORS 问题。
+- **缓存**：同一 `lineId` 的截图可缓存在 `memory` 或 `sessionStorage`（data URL 体积大，注意限额），避免网格内 9 路视频同时解码拖垮性能；可串行或 `requestIdleCallback` 分批解码。
+- **失败**：无视频、解码失败、画布污染时降级为纯色底图，仍显示角标与字幕。
 
 ## 8. 部署方案
 
@@ -595,7 +630,7 @@ npm run pipeline -- qa          # S6，看报告，不合格的集修好后重�
 
 1. Render → New Web Service → 连接仓库 → 运行环境选 Docker。
 2. 填环境变量（见 §8.3），健康检查路径设为 `/healthz`。
-3. 部署成功后打开域名，输入口令，搜索并播放，完成冒烟测试（见 §8.5）。
+3. 部署成功后打开域名，应**直接进入首页**；**无需**任何前置登录或口令即可搜索并播放，完成冒烟测试（见 §8.5）。
 4. 可选：用 UptimeRobot 每 5 分钟访问一次 `/healthz`，避免休眠。
 
 ### 8.3 环境变量
@@ -606,10 +641,8 @@ npm run pipeline -- qa          # S6，看报告，不合格的集修好后重�
 | `DATABASE_URL_UNPOOLED` | Neon 直连串（不带 `-pooler`），仅迁移与语料管线使用；缺省时回退到 `DATABASE_URL`。`neon deploy` 会自动写入 `.env.local` |
 | `STORAGE_DRIVER` | `local` 或 `r2` |
 | `R2_ACCOUNT_ID` / `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` / `R2_BUCKET` | R2 凭据 |
-| `SITE_PASSCODE` | 站点口令；生产环境不能留 `.env.example` 里的占位值 |
-| `COOKIE_SECRET` | cookie 签名密钥，32 位以上随机串；生产环境不能留占位值（生成：`openssl rand -base64 32`） |
 | `PUBLIC_BASE_URL` | 站点外部地址，用来拼分享链接 |
-| `NODE_ENV` | 线上设为 `production`（Dockerfile 已内置）。生产环境会：给 cookie 加 `Secure`、强制校验口令与密钥强度、**拒绝 `STORAGE_DRIVER=local`** |
+| `NODE_ENV` | 线上设为 `production`（Dockerfile 已内置）。生产环境会：**拒绝 `STORAGE_DRIVER=local`**（必须 R2），并跑与其它安全检查（不含站点口令，因本手册已取消 §4.2 所述门槛） |
 | `PORT` | 监听端口，默认 8080；Render 等平台会自动注入 |
 
 ### 8.4 Dockerfile（多阶段，一个镜像搞定）
@@ -661,8 +694,8 @@ CMD ["node", "server/dist/index.js"]
 
 ### 8.5 上线检查清单
 
-- [ ] `/healthz` 返回 200，错误口令被拒绝，限流生效。
-- [ ] 无口令直接访问 `/api/search` 返回 401。
+- [ ] `/healthz` 返回 200；限流在过高频请求下返回 429（验证一条易触发路径如 `POST /api/shares` 或搜索接口的策略即可）。
+- [ ] **匿名**访问 `/` 与 `GET /api/search?q=test` 均成功（**不出现**因「未登录」导致的 `401`）。
 - [ ] 搜索：中文、英文、两个词各试一次。
 - [ ] 播放：随机 3 条，到点自动暂停，能拖动不卡死。
 - [ ] 分享：生成链接，用无痕窗口打开能看能播。
@@ -745,7 +778,7 @@ GitHub Actions：对 `server`、`pipeline` 跑类型检查与测试，对 `web` 
 | 第 4 步 | M4 片段播放 | 随机播 10 条，检查起止是否准确 |
 | 第 5 步 | M5 勾选与分享 | 用无痕窗口打开分享链接 |
 | 第 6 步 | 扩充语料（1 集 → 第一季 → 全剧） | 每扩一批都看 QA 报告 |
-| 第 7 步 | M6 门禁与部署 | 注册云账号、填环境变量、走完 §8.5 清单 |
+| 第 7 步 | M6 部署与安全基础（无站点口令） | 注册云账号、填环境变量、走完 §8.5 清单 |
 | 第 8 步 | M7 打磨 | 找 2～3 个朋友试用，收集问题 |
 
 ### 9.6 常见卡点与处理办法
@@ -776,15 +809,15 @@ GitHub Actions：对 `server`、`pipeline` 跑类型检查与测试，对 `web` 
 - 提示词：「完成 M1。SRT 解析（兼容中英分开和双语合一两种格式）与按时间重叠对齐的逻辑用 TS 实现，并先写单测。」
 
 **M2 · 搜索与上下文 API**
-- 产出：`routes/search.ts`、`lines.ts`、`episodes.ts` 及对应 service 与 repo。
-- 验收：搜 `penny` 与 `佩妮` 都有结果；输入 `%` 不会匹配所有行；分页稳定不重复；`exact=1` 的结果集是默认结果集的子集；多词无交集时返回 `relaxed: true` 的弱相关结果，乱码输入不报错。
-- 提示词：「完成 M2，严格遵循 §6 的 API 契约，SQL 只能写在 repos。」
+- 产出：`routes/search.ts`、`lines.ts`、`episodes.ts`、`routes/discover.ts`（`GET /api/discover`）及对应 service 与 repo。
+- 验收：搜 `penny` 与 `佩妮` 都有结果；输入 `%` 不会匹配所有行；分页稳定不重复；`exact=1` 的结果集是默认结果集的子集；多词无交集时返回 `relaxed: true` 的弱相关结果，乱码输入不报错；`GET /api/discover` 固定返回 **9** 条，字段与 `GET /api/search` 的 `items[]` 单项一致，且在 `hasVideo: true` 的库存台词中**均匀随机**抽样（**匿名可调用**）。
+- 提示词：「完成 M2，严格遵循 §6 的 API 契约（含 `GET /api/discover`），SQL 只能写在 repos。」
 
 **M3 · 前端搜索页**
-- 前置：设计稿 `01`～`03` 已放入 `docs/design/`。
-- 产出：设计令牌（初始值见 §7.8）、`SearchPage` 与相关组件、URL 同步、语言切换、「仅完整台词」开关与结果数文案分级、弱相关提示。
-- 验收：刷新页面状态不丢；空态、无结果、加载中、错误四种状态都有。
-- 提示词：「完成 M3，视觉参考 @docs/design/01-search-desktop.png 等，交互遵循 §7.3。」
+- 前置：设计稿 `01`～`03`、**`06`、`07`** 已放入 `docs/design/`（推荐命名见 §7.7；短文件名 `06.png` / `07.png` 亦可）。
+- 产出：设计令牌（初始值见 §7.8）、`SearchPage` 与相关组件、URL 同步、语言切换、「仅完整台词」开关与结果数文案分级、弱相关提示；**`DiscoverGrid`（9 条随机推荐）**、**`SearchResultOverlay`（蒙版内上一条 / 下一条、复制链接）**；对接 `GET /api/discover`；片段底图按 §7.9 取帧。
+- 验收：刷新页面状态不丢；空态、无结果、加载中、错误四种状态都有；空态展示 9 张推荐卡；有结果时点击片段可打开蒙版并在列表内切换；「复制链接」生成的 URL 可再次打开并定位到该条（匿名可访问，无需登录）。
+- 提示词：「完成 M3，视觉参考 @docs/design/01-search-desktop.png、@docs/design/06-discovery-grid.png、@docs/design/07-search-result-overlay.png 等，交互遵循 §7.3、§7.9。」
 
 **M4 · 片段播放**
 - 产出：`playService`、`/play` 路由、`ClipPlayer`、`useClipPlayer`、`ContextDrawer`。
@@ -795,12 +828,12 @@ GitHub Actions：对 `server`、`pipeline` 跑类型检查与测试，对 `web` 
 - 产出：`selection` store、`SelectionBar`、`ShareDialog`、`shares` 路由、`SharePage`。
 - 验收：跨页勾选保留；超过 20 条被拦截；无痕窗口能打开分享页。
 
-**M6 · 门禁与部署**
-- 产出：`gate` 中间件与 `POST /api/auth`、`/api/auth` 限流、前端 `GatePage` 与 401 跳转、`r2Driver`、`pipeline upload` 对接 R2、静态托管与 SPA 回退、`robots.txt` 与 `X-Robots-Tag: noindex`（从 M7 提前）、Dockerfile 与 `.dockerignore`、`docs/DEPLOY.md`。
-- 验收：§8.5 清单全部通过。
+**M6 · 部署与安全基础**
+- 产出：按 IP / 路径的 `rateLimit` 中间件（与 §4.2「无站点口令」并存）、`r2Driver`、`pipeline upload` 对接 R2、静态托管与 SPA 回退、`robots.txt` 与 `X-Robots-Tag: noindex`（从 M7 提前）、Dockerfile 与 `.dockerignore`、`docs/DEPLOY.md`。**不实现**站点口令、`POST /api/auth`、`gate`、`GatePage`。
+- 验收：§8.5 清单全部通过；首页与核心 API 均无登录/口令步骤（§4.2）。
 
 **M7 · 打磨**
-- 移动端适配、分享接口限流（`/api/auth` 的限流已在 M6）、错误文案、性能检查（搜索 P95 < 300ms）。
+- 移动端适配、分享接口限流（M6 `rateLimit` 已覆盖部分路径；本步细化策略与 429 体验）、错误文案、性能检查（搜索 P95 < 300ms）。
 - 页脚「权利声明 / 投诉」入口（§4.2 第 5 条）。
 - 轻量埋点（FeatureList F10）：记录搜索日志（`q`、`exact`、结果数、是否 `relaxed`）和取用事件（播放、勾选、分享、复制）。用来统计零结果率、`exact` 使用率，以及北极星指标「素材被取用率」（有取用动作的会话数 ÷ 搜索会话数）。建表时同步更新 §5。
 
@@ -815,7 +848,7 @@ GitHub Actions：对 `server`、`pipeline` 跑类型检查与测试，对 `web` 
 | 风险 | 影响 | 应对 |
 |---|---|---|
 | 字幕与视频版本不匹配 | 台词和画面对不上 | 先用同一来源的字幕和视频；QA 抽查；必要时用 ffsubsync 校时 |
-| 版权 | 下架或法律风险 | 私有存储、口令门禁、只做自用 |
+| 版权 | 下架或法律风险 | 私有存储、URL 不公开扩散、`noindex` / `robots`、只做自用；**无口令 ≠ 可公开传播** |
 | 中英对齐出错 | 双语错位 | 对齐算法加单测；QA 报告低于 90% 的集人工抽查 |
 | 大陆访问慢 | 体验差 | 上线前让大陆朋友实测；必要时更换托管区域 |
 | Render 免费版休眠 | 首次打开慢 | UptimeRobot 保活，或切换到方案 B |
@@ -823,7 +856,7 @@ GitHub Actions：对 `server`、`pipeline` 跑类型检查与测试，对 `web` 
 
 **待补充**：
 
-1. 设计稿（§7.7 的 6 张，或已有的几张，哪几张就先放哪几张）。
+1. 设计稿（§7.7 表内 01～07；若文件名仍是 `01.png`～`07.png`，在提示词里 `@` 引用即可）。
 2. 手头视频的格式和字幕类型（内封软字幕、外挂 srt、还是图片字幕），这决定 M1 里的抽取方式。
 3. 主要用户在大陆还是海外，这决定方案 A 能不能直接用。
 
@@ -834,7 +867,8 @@ FeatureList 面向公开运营的完整产品；本手册是单剧、自用的 M
 | 处理 | FeatureList 条目 | 说明 |
 |---|---|---|
 | ✅ 已纳入 | F1.1 首页即搜索框、F1.3 精确短语、F1.9 空结果兜底、F1.5 结果数文案分级 | §6、§7.3 |
-| ✅ 已纳入 | F2.2 卡片信息、F2.5 上下文、F2.7 中英双语、F2.4 分页（`page` 入 URL） | §7.3；缩略图和无限滚动后续再做 |
+| ✅ 已纳入 | 空态 **9** 条随机推荐、搜索结果**片段蒙版**（设计稿 06、07） | §7.2～§7.3、§7.9；`GET /api/discover`；深链 `?lineId=` |
+| ✅ 已纳入 | F2.2 卡片信息、F2.5 上下文、F2.7 中英双语、F2.4 分页（`page` 入 URL） | §7.3；片段配图（取帧）见 §7.9；无限滚动后续再做 |
 | ✅ 已纳入 | F4.5 回流页、F4.6 强制出处、F8.3 下架通道 | 回流页即分享页 `/s/:id`；出处见 §7.3，下架见 §4.2；不做水印（自用） |
 | ✅ 已纳入 | §B 设计语言（莫兰迪色、圆角、阴影、动效） | §7.8 |
 | ✅ 已纳入 | F10 度量 | M7 轻量埋点 |
@@ -847,6 +881,6 @@ FeatureList 面向公开运营的完整产品；本手册是单剧、自用的 M
 | ⏭ 后续 | F2.1 桌面悬停自动循环、F2.3 素材类型角标、F2.6 三形态结果墙 | 依赖缩略图或预切片，MVP 为点击播放 |
 | ⚠️ 有冲突 | F1.2「索引非语言声（笑声、枪声）」 | MVP 的清洗步骤会把 `[laughs]` 之类删掉（§4.3）。要做「反应素材」时，改为保留并给 `lines` 加一列 `kind`，不在本期做 |
 | ⛔ 不适用 | F1.4 内容域筛选、F5 作品页 / 热榜 / 每日一句、F7.2 首发盘子 | 当前只有一部剧，用「按季筛选」代替 |
-| ⛔ 不做 | F6 素材盒、F8.1～F8.2 账号体系、F9 会员与广告、F7.4 敏感过滤、F8.4 备案 | 属于公开运营阶段；自用用口令门禁。**一旦要公开，F7.4 和 F8.4 必须先做** |
+| ⛔ 不做 | F6 素材盒、F8.1～F8.2 账号体系、F9 会员与广告、F7.4 敏感过滤、F8.4 备案 | 属于公开运营阶段；当前为「知道 URL 即可用」，不做账号口令。**一旦要公开，必须先补访问控制（含 F7.4 / F8.4 等）** |
 
 **北极星指标的 MVP 口径**：FeatureList 定义为「素材被取用率」。MVP 里的「取用」指播放、勾选、分享、复制任一动作，分母是搜索会话数，由 M7 埋点计算。

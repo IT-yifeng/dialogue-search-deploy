@@ -21,6 +21,13 @@ export interface SearchResponse {
   total: number;
   page: number;
   pageSize: number;
+  /** 多词 AND 无结果时放宽为 OR 时为 true */
+  relaxed: boolean;
+  items: SearchItem[];
+}
+
+/** GET /api/discover：每项字段与 SearchItem 相同 */
+export interface DiscoverResponse {
   items: SearchItem[];
 }
 
@@ -35,6 +42,8 @@ export interface EpisodesResponse {
 export interface SearchRequest {
   q: string;
   season?: number;
+  /** `1` 表示仅完整台词（整段不切词） */
+  exact?: 0 | 1;
   page: number;
   pageSize: number;
 }

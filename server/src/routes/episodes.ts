@@ -8,7 +8,7 @@ export function createEpisodesRoutes(service: SearchService): Hono {
   app.get('/', async (c) => {
     const items = await service.listEpisodes();
     // 列表只在入库新语料时才变化，缓存 5 分钟省掉大部分请求。
-    // 用 private 而不是 public：后续接口会加站点门禁，不能让共享缓存把受保护内容发给未登录的人。
+    // 用 private：避免共享代理/CDN 把同一响应发给不同访客（手册 §4.2 仍要求业务数据不走路由缓存旁路混用）。
     c.header('Cache-Control', 'private, max-age=300');
     return c.json({ items });
   });

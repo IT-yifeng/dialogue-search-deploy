@@ -23,14 +23,6 @@ export function shouldRetry(failureCount: number, error: unknown): boolean {
   return failureCount < 1;
 }
 
-// 门禁失效（cookie 过期、口令被改）时的统一处理：由 App 注册，负责跳到口令页。
-// 放在这里而不是每个页面各写一遍，是因为任何接口都可能在任何时刻返回 401。
-let unauthorizedHandler: (() => void) | null = null;
-
-export function setUnauthorizedHandler(handler: (() => void) | null): void {
-  unauthorizedHandler = handler;
-}
-
 interface ErrorBody {
   error?: { code?: string; message?: string };
 }
@@ -48,8 +40,6 @@ async function request<T>(path: string, init: RequestInit): Promise<T> {
   if (!res.ok) {
     // 后端挂了时网关可能返回 HTML，解析失败就退回通用文案
     const body = (await res.json().catch(() => null)) as ErrorBody | null;
-    // 只认 UNAUTHORIZED：口令错误是 INVALID_PASSCODE，属于口令页自己的表单反馈，不能触发跳转（否则会原地刷新）
-    if (res.status === 401 && body?.error?.code === 'UNAUTHORIZED') unauthorizedHandler?.();
     throw new ApiError(
       body?.error?.code ?? 'UNKNOWN',
       body?.error?.message ?? `请求失败（${res.status}）`,

@@ -16,8 +16,10 @@ export function useSearchParamsState() {
   return {
     state,
     // 换关键词或换季，结果集已经变了，旧页码没有意义，所以统一回到第 1 页
-    submitQuery: (q: string) => commit({ ...state, q: q.trim(), page: 1 }),
-    setSeason: (season: number | undefined) => commit({ ...state, season, page: 1 }),
+    submitQuery: (q: string) => commit({ ...state, q: q.trim(), page: 1, lineId: undefined }),
+    setSeason: (season: number | undefined) => commit({ ...state, season, page: 1, lineId: undefined }),
+    setExact: (exact: boolean) => commit({ ...state, exact, page: 1, lineId: undefined }),
     setPage: (page: number) => commit({ ...state, page }),
+    setLineId: (lineId: number | undefined) => commit({ ...state, lineId }),
   };
 }

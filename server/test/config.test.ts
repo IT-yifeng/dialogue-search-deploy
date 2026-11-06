@@ -1,4 +1,4 @@
-// 配置校验测试：门禁与存储相关的变量填错时，必须在启动阶段就失败，而不是上线后才暴露。
+// 配置校验测试：存储相关变量填错时，必须在启动阶段就失败，而不是上线后才暴露。
 import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
 import type { loadConfig as LoadConfig } from '../src/config.js';
@@ -11,7 +11,6 @@ before(async () => {
   ({ loadConfig } = await import('../src/config.js'));
 });
 
-const GOOD_SECRET = 'a'.repeat(40);
 const R2_ENV = {
   STORAGE_DRIVER: 'r2',
   R2_ACCOUNT_ID: 'acc',
@@ -23,44 +22,26 @@ const prodEnv = (extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv => ({
   NODE_ENV: 'production',
   DATABASE_URL: 'postgres://u:p@h/db',
   PUBLIC_BASE_URL: 'https://example.com',
-  SITE_PASSCODE: 'my-real-passcode',
-  COOKIE_SECRET: GOOD_SECRET,
   ...R2_ENV,
   ...extra,
 });
 
-test('开发环境：口令与密钥缺省时回退到占位值，r2 为 null', () => {
+test('开发环境：默认 local 驱动，r2 为 null', () => {
   const c = loadConfig({ DATABASE_URL: 'postgres://u:p@h/db' });
   assert.equal(c.storageDriver, 'local');
   assert.equal(c.r2, null);
-  assert.equal(c.sitePasscode, 'change-me');
-  assert.ok(c.cookieSecret.length >= 32);
 });
 
 test('生产环境：合法配置通过，并读出 R2 凭据', () => {
   const c = loadConfig(prodEnv());
   assert.equal(c.storageDriver, 'r2');
   assert.deepEqual(c.r2, { accountId: 'acc', accessKeyId: 'key', secretAccessKey: 'secret', bucket: 'bucket' });
-  assert.equal(c.sitePasscode, 'my-real-passcode');
 });
 
 test('生产环境：拒绝 STORAGE_DRIVER=local', () => {
   assert.throws(() => loadConfig(prodEnv({ STORAGE_DRIVER: 'local' })), /不能使用 STORAGE_DRIVER=local/);
   // 缺省值也是 local，同样要拒绝
   assert.throws(() => loadConfig(prodEnv({ STORAGE_DRIVER: undefined })), /不能使用 STORAGE_DRIVER=local/);
-});
-
-test('生产环境：口令缺失或仍是占位值时失败', () => {
-  assert.throws(() => loadConfig(prodEnv({ SITE_PASSCODE: undefined })), /SITE_PASSCODE/);
-  assert.throws(() => loadConfig(prodEnv({ SITE_PASSCODE: 'change-me' })), /SITE_PASSCODE/);
-});
-
-test('生产环境：COOKIE_SECRET 太短或仍是占位值时失败', () => {
-  assert.throws(() => loadConfig(prodEnv({ COOKIE_SECRET: 'short' })), /COOKIE_SECRET/);
-  assert.throws(
-    () => loadConfig(prodEnv({ COOKIE_SECRET: 'replace-with-a-random-string-of-32-chars-or-more' })),
-    /COOKIE_SECRET/,
-  );
 });
 
 test('r2 驱动：缺任意一个 R2_* 变量都失败，并指出是哪一个', () => {

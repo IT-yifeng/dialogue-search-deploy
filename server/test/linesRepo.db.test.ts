@@ -143,6 +143,31 @@ describe('linesRepo / episodesRepo（真实数据库）', { skip: url ? false : 
     assert.equal((await search(['zorblax', 'wibble'])).total, 0);
   });
 
+  test('exact=1：连续子串命中；返回行是默认分词 AND 结果的子集（手册 M2 验收）', async () => {
+    const repo = lines();
+    // e11_1 英文含 “battery” 与 “is”，且含连续子串 “battery is”
+    const loose = await repo.search({
+      terms: ['battery', 'is'],
+      mode: 'and',
+      limit: 100,
+      offset: 0,
+      exact: false,
+    });
+    const strict = await repo.search({
+      terms: ['battery is'],
+      mode: 'and',
+      limit: 100,
+      offset: 0,
+      exact: true,
+    });
+    assert.ok(loose.total >= 1);
+    assert.ok(strict.total >= 1);
+    const allowed = new Set(loose.items.map((r) => r.id));
+    for (const row of strict.items) {
+      assert.ok(allowed.has(row.id), `exact 命中的 id=${row.id} 应同时被分词 AND 命中`);
+    }
+  });
+
   test('season 筛选', async () => {
     assert.equal((await search(['zorblax'], { season: 1 })).total, 2);
     assert.equal((await search(['zorblax'], { season: 2 })).total, 0);

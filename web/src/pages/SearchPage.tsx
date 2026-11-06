@@ -1,7 +1,9 @@
-import { keepPreviousData, useQuery } from '@tanstack/react-query';
-import { useEffect, useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { fetchLine } from '../api/lines';
 import { fetchEpisodes, searchLines } from '../api/search';
+import type { SearchItem } from '../api/types';
 import { FilterBar } from '../components/FilterBar';
 import { Hero } from '../components/Hero';
 import { LogoMark } from '../components/icons';
@@ -10,37 +12,58 @@ import { Pagination } from '../components/Pagination';
 import { ResultCard } from '../components/ResultCard';
 import { ResultSkeleton } from '../components/ResultSkeleton';
 import { SearchBar } from '../components/SearchBar';
+import { SearchResultOverlay } from '../components/SearchResultOverlay';
 import { SelectionBar } from '../components/SelectionBar';
 import { ShareDialog } from '../components/ShareDialog';
 import { ErrorBar, NoResults, PageOutOfRange } from '../components/StateViews';
 import { ThemeToggle } from '../components/ThemeToggle';
 import { useSearchParamsState } from '../hooks/useSearchParamsState';
-import { splitTerms } from '../lib/highlight';
+import { splitTermsForHighlight } from '../lib/highlight';
+import { buildSearchParams } from '../lib/searchParams';
+import { copyToClipboard } from '../lib/copyText';
+import { useToastStore } from '../store/toast';
 import { useLangStore } from '../store/lang';
 import { useSelectionStore } from '../store/selection';
 
 const PAGE_SIZE = 20;
 
+type OverlayState =
+  | { source: 'search'; lines: SearchItem[]; index: number }
+  | { source: 'discover'; lines: SearchItem[]; index: number };
+
 export default function SearchPage() {
-  const { state, submitQuery, setSeason, setPage } = useSearchParamsState();
-  const { q, season, page } = state;
+  const { state, submitQuery, setSeason, setPage, setExact, setLineId } = useSearchParamsState();
+  const { q, season, page, exact, lineId } = state;
   const hasQuery = q !== '';
   const mode = useLangStore((s) => s.mode);
-  // 勾选存在全局 store（跨搜索保留）；这里只需要知道“有没有”，用来给悬浮条让出底部空间
   const hasSelection = useSelectionStore((s) => s.items.length > 0);
+  const showToast = useToastStore((s) => s.show);
   const [shareOpen, setShareOpen] = useState(false);
+  const [overlay, setOverlay] = useState<OverlayState | null>(null);
+  /** 蒙版里「上一条 / 下一条」跨页时，等新页数据到了再定位到哪一条 */
+  const pagePickRef = useRef<'first' | 'last' | null>(null);
 
-  const search = useQuery({
-    queryKey: ['search', q, season, page],
-    queryFn: ({ signal }) => searchLines({ q, season, page, pageSize: PAGE_SIZE }, signal),
-    enabled: hasQuery,
-    // 只在“同一关键词、同一季”翻页时保留上一页内容避免闪烁；
-    // 换了关键词还显示旧结果会误导用户，那种情况走骨架屏
-    placeholderData: (prev, prevQuery) =>
-      prevQuery && prevQuery.queryKey[1] === q && prevQuery.queryKey[2] === season ? prev : undefined,
+  const deepLine = useQuery({
+    queryKey: ['line', lineId],
+    queryFn: ({ signal }) => fetchLine(lineId!, signal),
+    enabled: !hasQuery && lineId !== undefined,
+    retry: false,
   });
 
-  // 季集列表只用来生成“季”下拉；接口可缓存，所以长时间不重新请求
+  const search = useQuery({
+    queryKey: ['search', q, season, exact, page],
+    queryFn: ({ signal }) =>
+      searchLines({ q, season, exact: exact ? 1 : undefined, page, pageSize: PAGE_SIZE }, signal),
+    enabled: hasQuery,
+    placeholderData: (prev, prevQuery) =>
+      prevQuery &&
+      prevQuery.queryKey[1] === q &&
+      prevQuery.queryKey[2] === season &&
+      prevQuery.queryKey[3] === exact
+        ? prev
+        : undefined,
+  });
+
   const episodes = useQuery({
     queryKey: ['episodes'],
     queryFn: ({ signal }) => fetchEpisodes(signal),
@@ -51,23 +74,152 @@ export default function SearchPage() {
     [episodes.data],
   );
 
-  const terms = useMemo(() => splitTerms(q), [q]);
+  const terms = useMemo(() => splitTermsForHighlight(q, exact), [q, exact]);
+  const emptyTerms = useMemo(() => [] as string[], []);
+
+  const data = search.data;
+  const totalPages = data ? Math.ceil(data.total / data.pageSize) : 0;
+
+  const closeOverlay = useCallback(() => {
+    setOverlay(null);
+    setLineId(undefined);
+  }, [setLineId]);
+
+  const openSearchOverlay = useCallback(
+    (lines: SearchItem[], index: number) => {
+      setOverlay({ source: 'search', lines, index });
+      setLineId(lines[index]?.id);
+    },
+    [setLineId],
+  );
+
+  const handleDiscoverPick = useCallback(
+    (lines: SearchItem[], line: SearchItem, index: number) => {
+      if (lines.length === 0) return;
+      setOverlay({ source: 'discover', lines, index });
+      setLineId(line.id);
+    },
+    [setLineId],
+  );
+
+  // 深链 ?lineId=：有搜索词时在结果里定位；无搜索词（首页）时 GET /api/lines/:id 拉单条再开蒙版
+  useEffect(() => {
+    if (lineId === undefined || overlay !== null) return;
+    if (hasQuery) {
+      if (!data?.items?.length) return;
+      const idx = data.items.findIndex((x) => x.id === lineId);
+      if (idx >= 0) setOverlay({ source: 'search', lines: data.items, index: idx });
+      return;
+    }
+    if (deepLine.data) setOverlay({ source: 'discover', lines: [deepLine.data], index: 0 });
+  }, [hasQuery, lineId, data?.items, overlay, deepLine.data]);
+
+  // 蒙版跨页：翻页后数据到了再对齐 overlay
+  useEffect(() => {
+    if (!hasQuery || !data?.items?.length || pagePickRef.current === null) return;
+    const pick = pagePickRef.current;
+    pagePickRef.current = null;
+    const idx = pick === 'first' ? 0 : data.items.length - 1;
+    const line = data.items[idx];
+    if (!line) return;
+    setOverlay({ source: 'search', lines: data.items, index: idx });
+    setLineId(line.id);
+  }, [hasQuery, data?.items, setLineId]);
+
+  useEffect(() => {
+    pagePickRef.current = null;
+  }, [q, season, exact]);
 
   useEffect(() => {
     document.title = hasQuery ? `${q} - 台词搜索` : '台词搜索';
   }, [q, hasQuery]);
 
   const handlePageChange = (p: number) => {
+    pagePickRef.current = null;
     setPage(p);
     window.scrollTo({ top: 0 });
   };
 
-  const data = search.data;
-  const totalPages = data ? Math.ceil(data.total / data.pageSize) : 0;
+  const buildLineDeepLink = useCallback(
+    (id: number) => {
+      const params = buildSearchParams({ ...state, lineId: id });
+      return `${window.location.origin}${window.location.pathname}?${params}`;
+    },
+    [state],
+  );
+
+  const overlayLine = overlay ? overlay.lines[overlay.index] ?? null : null;
+  const shareUrl = overlayLine ? buildLineDeepLink(overlayLine.id) : '';
+
+  const overlayPrevNext = useMemo(() => {
+    if (!overlay) return { prev: () => {}, next: () => {}, dPrev: true, dNext: true };
+    const { lines, index, source } = overlay;
+    const n = lines.length;
+    if (source === 'discover') {
+      return {
+        prev: () => {
+          const ni = (index - 1 + n) % n;
+          setOverlay({ source: 'discover', lines, index: ni });
+          setLineId(lines[ni]!.id);
+        },
+        next: () => {
+          const ni = (index + 1) % n;
+          setOverlay({ source: 'discover', lines, index: ni });
+          setLineId(lines[ni]!.id);
+        },
+        dPrev: false,
+        dNext: false,
+      };
+    }
+    const disablePrev = index <= 0 && page <= 1;
+    const disableNext = index >= n - 1 && page >= totalPages;
+    return {
+      prev: () => {
+        if (index > 0) {
+          const ni = index - 1;
+          setOverlay({ source: 'search', lines, index: ni });
+          setLineId(lines[ni]!.id);
+          return;
+        }
+        if (page > 1) {
+          pagePickRef.current = 'last';
+          setPage(page - 1);
+        }
+      },
+      next: () => {
+        if (index < n - 1) {
+          const ni = index + 1;
+          setOverlay({ source: 'search', lines, index: ni });
+          setLineId(lines[ni]!.id);
+          return;
+        }
+        if (page < totalPages) {
+          pagePickRef.current = 'first';
+          setPage(page + 1);
+        }
+      },
+      dPrev: disablePrev,
+      dNext: disableNext,
+    };
+  }, [overlay, page, totalPages, setLineId, setPage]);
+
+  const onCopyDeepLink = useCallback(async () => {
+    if (!overlayLine) return;
+    const ok = await copyToClipboard(buildLineDeepLink(overlayLine.id));
+    showToast(ok ? '链接已复制' : '复制失败，请手动复制地址栏');
+  }, [overlayLine, buildLineDeepLink, showToast]);
 
   let body;
   if (!hasQuery) {
-    body = <Hero value={q} onSubmit={submitQuery} />;
+    body = (
+      <Hero
+        value={q}
+        onSubmit={submitQuery}
+        mode={mode}
+        highlightTerms={emptyTerms}
+        onDiscoverPick={(line, i, all) => handleDiscoverPick(all, line, i)}
+      />
+    );
   } else if (search.isError) {
     body = <ErrorBar error={search.error} onRetry={() => void search.refetch()} />;
   } else if (!data) {
@@ -79,10 +231,28 @@ export default function SearchPage() {
   } else {
     body = (
       <div className="space-y-8">
-        {/* 翻页请求进行中：保留旧内容但淡化，告诉用户正在更新 */}
+        {data.relaxed && (
+          <p
+            role="status"
+            className="rounded-card border border-brand-fg/25 bg-brand-soft/40 px-4 py-3 text-sm text-ink"
+          >
+            没有同时包含全部关键词的台词，下面是包含部分词的结果
+          </p>
+        )}
+        {!exact && data.total > 2000 && (
+          <p className="text-center text-sm text-ink-sub">
+            结果较多，试试开启「仅完整台词」收紧匹配
+          </p>
+        )}
         <ul className={`space-y-3 transition-opacity ${search.isPlaceholderData ? 'opacity-50' : ''}`}>
-          {data.items.map((item) => (
-            <ResultCard key={item.id} line={item} mode={mode} terms={terms} />
+          {data.items.map((item, i) => (
+            <ResultCard
+              key={item.id}
+              line={item}
+              mode={mode}
+              terms={terms}
+              onOpenOverlay={() => openSearchOverlay(data.items, i)}
+            />
           ))}
         </ul>
         <Pagination page={page} totalPages={totalPages} onChange={handlePageChange} />
@@ -92,20 +262,16 @@ export default function SearchPage() {
 
   return (
     <div className="relative min-h-screen overflow-x-clip">
-      {/* 顶部光晕与细网格，纯装饰 */}
       <div className={hasQuery ? 'page-backdrop page-backdrop-soft' : 'page-backdrop'} aria-hidden />
 
-      {/* 有勾选时多留一些底部空间，避免悬浮条盖住分页 */}
       <div className={`mx-auto max-w-3xl px-4 ${hasSelection ? 'pb-40' : 'pb-20'}`}>
         <header
           className={
             hasQuery
-              ? // 结果页顶栏吸顶 + 毛玻璃：滚动长列表时搜索框始终在手边
-                'sticky top-0 z-20 -mx-4 border-b border-line/70 bg-surface-page/80 px-4 pb-3 pt-3 backdrop-blur-xl'
+              ? 'sticky top-0 z-20 -mx-4 border-b border-line/70 bg-surface-page/80 px-4 pb-3 pt-3 backdrop-blur-xl'
               : 'pt-4'
           }
         >
-          {/* 窄屏：第一行 logo + 开关，第二行搜索框；宽屏三者排成一行（靠 order 调整，DOM 顺序保持 logo → 搜索 → 开关） */}
           <div className="flex flex-wrap items-center gap-x-3 gap-y-3">
             <Link to="/" className="flex shrink-0 items-center gap-2 rounded-control text-base font-extrabold">
               <LogoMark className="h-8 w-8" />
@@ -123,7 +289,14 @@ export default function SearchPage() {
           </div>
           {hasQuery && (
             <div className="mt-3">
-              <FilterBar season={season} seasons={seasons} total={data?.total} onSeasonChange={setSeason} />
+              <FilterBar
+                season={season}
+                exact={exact}
+                seasons={seasons}
+                total={data?.total}
+                onSeasonChange={setSeason}
+                onExactChange={setExact}
+              />
             </div>
           )}
         </header>
@@ -133,6 +306,20 @@ export default function SearchPage() {
           {body}
         </main>
       </div>
+
+      <SearchResultOverlay
+        open={overlay !== null}
+        line={overlayLine}
+        mode={mode}
+        terms={terms}
+        onClose={closeOverlay}
+        onPrev={overlayPrevNext.prev}
+        onNext={overlayPrevNext.next}
+        disablePrev={overlayPrevNext.dPrev}
+        disableNext={overlayPrevNext.dNext}
+        shareUrl={shareUrl}
+        onCopyLink={onCopyDeepLink}
+      />
 
       <SelectionBar onOpenShare={() => setShareOpen(true)} />
       {shareOpen && <ShareDialog onClose={() => setShareOpen(false)} />}

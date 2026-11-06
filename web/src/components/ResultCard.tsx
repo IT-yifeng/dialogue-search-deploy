@@ -16,9 +16,11 @@ interface Props {
   mode: LangMode;
   /** 已拆分好的关键词，用于高亮 */
   terms: string[];
+  /** 打开全屏片段蒙版（§7.2） */
+  onOpenOverlay?: () => void;
 }
 
-export function ResultCard({ line, mode, terms }: Props) {
+export function ResultCard({ line, mode, terms, onOpenOverlay }: Props) {
   const displayLines = pickDisplayLines(line, mode);
   const title = pickEpisodeTitle(line.episode, mode);
 
@@ -75,11 +77,19 @@ export function ResultCard({ line, mode, terms }: Props) {
       className={`animate-fade-up rounded-card border p-4 shadow-soft transition duration-200 ease-out hover:-translate-y-0.5 hover:shadow-lift sm:p-5 ${
         showPlayer ? 'border-brand-fg/60' : selected ? 'border-brand-fg/30' : 'border-line'
       } ${selected ? 'bg-brand-soft/50' : 'bg-surface'}`}
+      onClick={(e) => {
+        const el = e.target as HTMLElement;
+        if (el.closest('button, label, input, [role="dialog"]')) return;
+        onOpenOverlay?.();
+      }}
     >
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-meta text-ink-sub">
         {/* 视觉上是 20px 的小方框，外层 label 的内边距把可点区域撑到 40px（移动端手指好点）；
             负外边距抵消内边距，不影响与右侧文字的间距。真正的 checkbox 保留给读屏与键盘 */}
-        <label className="-my-2.5 -ml-2.5 -mr-1 flex cursor-pointer items-center p-2.5">
+        <label
+          className="-my-2.5 -ml-2.5 -mr-1 flex cursor-pointer items-center p-2.5"
+          onClick={(e) => e.stopPropagation()}
+        >
           <input
             type="checkbox"
             checked={selected}
@@ -126,11 +136,26 @@ export function ResultCard({ line, mode, terms }: Props) {
       </div>
 
       <div className="mt-4 flex flex-wrap items-center gap-2">
+        {onOpenOverlay && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpenOverlay();
+            }}
+            className="inline-flex items-center gap-1 rounded-pill border border-brand-fg/40 bg-brand-soft/60 px-3.5 py-1.5 text-sm font-semibold text-brand-fg transition hover:bg-brand-soft active:scale-[0.98]"
+          >
+            查看片段
+          </button>
+        )}
         <button
           type="button"
           disabled={!line.hasVideo}
           title={line.hasVideo ? undefined : '这一集暂无视频'}
-          onClick={() => startClip({ startMs: line.startMs, endMs: line.endMs })}
+          onClick={(e) => {
+            e.stopPropagation();
+            startClip({ startMs: line.startMs, endMs: line.endMs });
+          }}
           className="relative inline-flex items-center gap-1.5 rounded-pill bg-brand-gradient px-4 py-1.5 text-sm font-semibold text-white transition hover:brightness-110 active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-none disabled:bg-surface-muted disabled:text-ink-faint disabled:hover:brightness-100"
         >
           {replay ? <ReplayIcon /> : <PlayIcon />}
@@ -142,7 +167,10 @@ export function ResultCard({ line, mode, terms }: Props) {
         <button
           type="button"
           aria-expanded={contextOpen}
-          onClick={() => setContextOpen((v) => !v)}
+          onClick={(e) => {
+            e.stopPropagation();
+            setContextOpen((v) => !v);
+          }}
           className="inline-flex items-center gap-1 rounded-pill border border-line px-3.5 py-1.5 text-sm text-ink-sub transition hover:border-brand-fg hover:text-brand-fg active:scale-[0.98]"
         >
           上下文
