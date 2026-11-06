@@ -1,0 +1,24 @@
+# 版权素材：原始视频、字幕与管线中间产物，永不入 git（手册 §4.2）
+raw/
+work/
+
+# 兜底：即使文件被误放到其他目录，也不让视频和字幕进入仓库
+*.mkv
+*.mp4
+*.srt
+# 例外：M1 的自编样例字幕（非版权素材）
+!pipeline/test/fixtures/**
+
+# 密钥与本地配置
+.env
+.env.*
+!.env.example
+
+# 依赖与构建产物
+node_modules/
+dist/
+*.tsbuildinfo
+
+# 系统文件
+.DS_Store
+.neon

@@ -1,0 +1,110 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* 颜色令牌的真实取值（手册 §7.8）。通道值以空格分隔，供 tailwind.config.ts 拼成 rgb(var(--x) / alpha) */
+:root {
+  --c-page: 245 249 251;
+  --c-surface: 255 255 255;
+  --c-muted: 235 242 246;
+  --c-ink: 15 27 36;
+  --c-ink-sub: 71 91 105;
+  --c-ink-faint: 98 118 137;
+  --c-line: 218 231 237;
+  --c-brand: 14 124 143;
+  --c-brand-hover: 11 102 119;
+  --c-brand-fg: 14 124 143;
+  --c-brand-soft: 225 244 247;
+  --c-glow: 34 195 214;
+  --c-danger: 180 55 46;
+  --c-danger-soft: 253 238 236;
+  /* 让原生控件（下拉、滚动条、视频控制条）跟着主题变色 */
+  color-scheme: light;
+}
+
+.dark {
+  --c-page: 11 20 24;
+  --c-surface: 17 29 35;
+  --c-muted: 24 40 48;
+  --c-ink: 230 241 245;
+  --c-ink-sub: 157 180 192;
+  --c-ink-faint: 127 151 164;
+  --c-line: 35 54 63;
+  --c-brand: 14 129 150;
+  --c-brand-hover: 11 102 119;
+  --c-brand-fg: 79 209 224;
+  --c-brand-soft: 18 55 64;
+  --c-glow: 34 195 214;
+  --c-danger: 242 139 130;
+  --c-danger-soft: 58 27 26;
+  color-scheme: dark;
+}
+
+@layer base {
+  body {
+    @apply bg-surface-page font-sans text-ink antialiased;
+    /* 切换主题时颜色平滑过渡，但只作用在 body，避免整页元素同时动画造成卡顿 */
+    transition: background-color 180ms ease-out, color 180ms ease-out;
+  }
+
+  /* 键盘聚焦时给出清晰的环，鼠标点击不显示 */
+  :focus-visible {
+    @apply outline-none ring-2 ring-brand-fg ring-offset-2 ring-offset-surface-page;
+  }
+
+  /* 荧光笔式高亮：只在下半截铺一层半透明亮青，文字颜色保持不变，亮暗模式都清晰 */
+  mark {
+    @apply rounded-sm px-0.5 text-inherit;
+    background-color: transparent;
+    background-image: linear-gradient(transparent 52%, rgb(var(--c-glow) / 0.42) 52%);
+  }
+}
+
+@layer components {
+  /* 页面顶部的光晕 + 细网格，向下渐隐。放在内容后面，不拦截点击 */
+  .page-backdrop {
+    @apply pointer-events-none absolute inset-x-0 top-0 -z-10 h-[34rem];
+    background-image:
+      radial-gradient(60% 55% at 50% 0%, rgb(var(--c-glow) / 0.2), transparent 70%),
+      linear-gradient(rgb(var(--c-line) / 0.7) 1px, transparent 1px),
+      linear-gradient(90deg, rgb(var(--c-line) / 0.7) 1px, transparent 1px);
+    background-size: auto, 36px 36px, 36px 36px;
+    -webkit-mask-image: linear-gradient(to bottom, black 35%, transparent);
+    mask-image: linear-gradient(to bottom, black 35%, transparent);
+  }
+
+  /* 结果页只保留顶部光晕：长列表后面再铺网格会和卡片抢视线 */
+  .page-backdrop-soft {
+    @apply h-72;
+    background-image: radial-gradient(60% 55% at 50% 0%, rgb(var(--c-glow) / 0.16), transparent 70%);
+    background-size: auto;
+  }
+
+  /* 骨架屏流光 */
+  .skeleton {
+    background-image: linear-gradient(
+      90deg,
+      rgb(var(--c-muted)) 0%,
+      rgb(var(--c-line)) 50%,
+      rgb(var(--c-muted)) 100%
+    );
+    background-size: 200% 100%;
+  }
+
+  /* 品牌渐变：主按钮与 logo。端点颜色都要保证白字对比度 ≥ 4.5:1 */
+  .bg-brand-gradient {
+    background-image: linear-gradient(135deg, #0e8196, #0a6475);
+  }
+}
+
+/* 尊重“减少动态效果”：关掉所有动画与过渡，状态变化直接生效 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

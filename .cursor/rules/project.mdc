@@ -1,0 +1,42 @@
+---
+description: 台词搜索项目的全局约定：技术栈、分层、注释、依赖与版权规则
+alwaysApply: true
+---
+
+# 项目规则
+
+事实来源是 `docs/IMPLEMENTATION.md`。API 契约、表结构、交互如需调整，先改手册对应章节，再改代码。
+
+## 技术栈（手册 §2）
+
+- 前端：Vite + React + TypeScript + Tailwind + React Router + TanStack Query + Zustand
+- 后端：Node 22 + Hono + TypeScript
+- 数据库：PostgreSQL（`pg_trgm` 做中英文子串搜索），只依赖 `DATABASE_URL`
+- 素材存储：Cloudflare R2，业务代码只依赖 `StorageDriver` 接口
+- 管线：Node 脚本 + ffmpeg，本机运行，不随服务部署
+- 仓库为 npm workspaces：`server` / `pipeline` / `web`
+
+## 分层依赖方向（手册 §3.2）
+
+```
+routes ──► services ──► repos ──► db
+              └──────► storage (StorageDriver)
+```
+
+- 只能自上而下依赖，禁止 `repos` 调用 `services`。
+- `routes` 里不出现 SQL，只做参数校验与返回格式；`repos` 里不出现 HTTP 概念。
+- `pipeline` 与 `server` 共用 `server/src/db/migrations`，但代码互不引用。
+- 用户输入进入 SQL 前必须参数化，LIKE 通配符用 `escapeLike` 转义。
+
+## 编码约定
+
+- 注释一律用中文，重点说明「为什么这么做」，而不是复述代码。
+- 不引入未经说明的依赖；确实需要新增时，先告诉用户理由，得到认可再装。
+- 只做当前里程碑范围内的事，不顺手实现后续里程碑的功能。
+- 不随意改变手册 §3.1 约定的目录结构。
+
+## 版权素材（硬性要求）
+
+- `raw/`、`work/`、视频文件、字幕文件不得进入 git；不要修改 `.gitignore` 来放行它们。
+- `.env` 和任何密钥不得提交，只提交 `.env.example`。
+- 测试只用 `pipeline/test/fixtures/` 里的自编样例，不要把真实台词写进代码或测试。

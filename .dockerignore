@@ -1,0 +1,26 @@
+# 版权素材与密钥绝不能进入构建上下文：一旦进了，就可能被打进镜像层（手册 §4.2）
+# 注意：.dockerignore 的 *.mp4 只匹配根目录，要匹配任意层级必须写 **/*.mp4
+raw/
+work/
+**/.env
+**/.env.*
+!**/.env.example
+**/*.mkv
+**/*.mp4
+**/*.srt
+
+# 依赖与构建产物在镜像里重新安装、重新构建
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+
+# 与运行无关的内容，排除后构建上下文更小、缓存更稳
+.git
+.cursor
+.neon
+docs
+**/.DS_Store
+
+# pipeline 不进镜像，但 npm ci 需要它的 package.json 才能校验 lock 文件
+pipeline/*
+!pipeline/package.json

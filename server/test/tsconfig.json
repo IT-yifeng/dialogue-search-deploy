@@ -1,0 +1,9 @@
+{
+  // 仅用于类型检查测试代码：主 tsconfig 的 rootDir 是 src，不能直接包含 test
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "..",
+    "noEmit": true
+  },
+  "include": ["../src", "."]
+}
