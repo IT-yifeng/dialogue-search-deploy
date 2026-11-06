@@ -23,8 +23,9 @@ export interface VideoPosterFrameResult {
 }
 
 /**
- * 挂载一个（通常 `opacity-0` 或 `absolute inset-0`）`<video ref={videoRef} />`，
- * 在台词中点显示静帧；不截图，故不受跨域画布污染限制。
+ * 挂载一个（通常叠在卡片/蒙版里）`<video ref={videoRef} />`，在台词中点显示静帧。
+ * **不要**设置 `crossOrigin = 'anonymous'`：预签名 URL 跨域加载时，若存储未回 `Access-Control-Allow-Origin`，
+ * 带 CORS 的视频请求会整段失败（error），画面永远出不来；静帧展示不读像素，不需要 CORS。
  */
 export function useVideoPosterFrame(line: SearchItem | null, enabled: boolean): VideoPosterFrameResult {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -71,7 +72,8 @@ export function useVideoPosterFrame(line: SearchItem | null, enabled: boolean): 
     video.muted = true;
     video.playsInline = true;
     video.preload = 'auto';
-    video.crossOrigin = 'anonymous';
+    // 不显式设 crossOrigin：否则对象存储未配 CORS 时整段加载失败（表现为始终无画面）
+    video.removeAttribute('crossorigin');
     video.src = url;
     video.addEventListener('seeked', onSeeked);
     video.addEventListener('error', onError);

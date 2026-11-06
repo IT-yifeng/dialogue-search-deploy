@@ -3,14 +3,13 @@ import { useEffect } from 'react';
 import type { SearchItem } from '../api/types';
 import { useVideoPosterFrame } from '../hooks/useVideoPosterFrame';
 import { formatSeasonEpisodeLabel } from '../lib/formatTime';
-import { pickDisplayLines, type LangMode } from '../lib/displayLines';
+import { pickDisplayLines } from '../lib/displayLines';
 import { HighlightText } from './HighlightText';
 import { CloseIcon } from './icons';
 
 interface Props {
   open: boolean;
   line: SearchItem | null;
-  mode: LangMode;
   terms: string[];
   onClose: () => void;
   onPrev: () => void;
@@ -25,7 +24,6 @@ interface Props {
 export function SearchResultOverlay({
   open,
   line,
-  mode,
   terms,
   onClose,
   onPrev,
@@ -36,7 +34,8 @@ export function SearchResultOverlay({
   onCopyLink,
 }: Props) {
   const { ready, loading, failed, videoRef } = useVideoPosterFrame(line, open);
-  const display = line ? pickDisplayLines(line, mode) : [];
+  // 蒙版与九宫格一致：底图上叠双语字幕（与顶栏英/中/双语的「高亮词」无关，terms 仍生效）
+  const display = line ? pickDisplayLines(line, 'both') : [];
 
   useEffect(() => {
     if (!open) return;
@@ -83,7 +82,7 @@ export function SearchResultOverlay({
         </div>
 
         <div className="relative min-h-[38vh] flex-1 overflow-y-auto bg-ink sm:min-h-[42vh]">
-          {/* 用大尺寸 16:9 视频区，避免蒙版过窄；关键帧用 video 元素避免跨域 canvas 截图为空 */}
+          {/* 16:9 视频区 + 底部字幕叠在画面上（与首页九宫格一致） */}
           <div className="relative aspect-video w-full overflow-hidden bg-[rgb(var(--c-brand-soft))]">
             {line.hasVideo && !failed && (
               <video
@@ -92,7 +91,6 @@ export function SearchResultOverlay({
                 playsInline
                 preload="auto"
                 className={`absolute inset-0 h-full w-full object-contain ${ready ? 'opacity-100' : 'opacity-0'}`}
-                crossOrigin="anonymous"
                 aria-hidden
               />
             )}
@@ -102,20 +100,20 @@ export function SearchResultOverlay({
             {loading && (
               <span className="absolute right-3 top-3 z-10 h-5 w-5 animate-spin rounded-full border-2 border-white/30 border-t-white" />
             )}
-          </div>
 
-          <div className="border-t border-white/10 bg-gradient-to-b from-black/80 to-black px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-4">
-            {display.map((l) => (
-              <p
-                key={l.lang}
-                lang={l.lang === 'en' ? 'en' : 'zh-CN'}
-                className={`text-base leading-relaxed text-white drop-shadow-md ${
-                  mode === 'both' && l.lang === 'zh' ? 'mt-1 text-white/85' : 'font-semibold'
-                }`}
-              >
-                <HighlightText text={l.text} terms={terms} />
-              </p>
-            ))}
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/88 via-black/45 to-transparent px-4 pb-4 pt-16 sm:px-6 sm:pb-5">
+              {display.map((l) => (
+                <p
+                  key={l.lang}
+                  lang={l.lang === 'en' ? 'en' : 'zh-CN'}
+                  className={`text-base leading-relaxed text-white drop-shadow-[0_1px_3px_rgb(0_0_0/0.95)] sm:text-lg ${
+                    l.lang === 'zh' ? 'mt-1 text-white/90' : 'font-semibold'
+                  }`}
+                >
+                  <HighlightText text={l.text} terms={terms} />
+                </p>
+              ))}
+            </div>
           </div>
         </div>
 

@@ -108,7 +108,6 @@ export function SnippetCard({ line, terms, onOpenOverlay, variant }: Props) {
             playsInline
             preload="auto"
             className={`absolute inset-0 h-full w-full object-cover transition duration-300 group-hover:scale-[1.02] ${showVideo ? 'opacity-100' : 'opacity-0'}`}
-            crossOrigin="anonymous"
             aria-hidden
           />
         )}

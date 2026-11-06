@@ -302,7 +302,6 @@ export default function SearchPage() {
       <SearchResultOverlay
         open={overlay !== null}
         line={overlayLine}
-        mode={mode}
         terms={terms}
         onClose={closeOverlay}
         onPrev={overlayPrevNext.prev}
