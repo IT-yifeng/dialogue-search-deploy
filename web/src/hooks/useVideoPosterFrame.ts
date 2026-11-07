@@ -111,7 +111,8 @@ export function useVideoPosterFrame(line: SearchItem | null, enabled: boolean): 
     video.pause();
     video.muted = true;
     video.playsInline = true;
-    video.preload = 'auto';
+    // 卡片静帧只需元数据 + 跳到中点，勿 preload=auto 拉整集
+    video.preload = 'metadata';
     // 不显式设 crossOrigin：否则对象存储未配 CORS 时整段加载失败（表现为始终无画面）
     video.removeAttribute('crossorigin');
     video.src = url;

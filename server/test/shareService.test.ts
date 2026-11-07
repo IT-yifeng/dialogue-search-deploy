@@ -6,6 +6,7 @@ import type { LinesRepo, SearchHit } from '../src/repos/linesRepo.js';
 import type { ShareRecord, SharesRepo } from '../src/repos/sharesRepo.js';
 import type { PlayService } from '../src/services/playService.js';
 import { createShareService, SHARE_MAX_LINES, SHARE_NOTE_MAX } from '../src/services/shareService.js';
+import type { StorageDriver } from '../src/storage/types.js';
 
 const hit = (id: number): SearchHit => ({
   id,
@@ -15,7 +16,18 @@ const hit = (id: number): SearchHit => ({
   en: `line ${id}`,
   zh: `第 ${id} 句`,
   hasVideo: true,
+  frameKey: null,
 });
+
+const testStorage: StorageDriver = {
+  async put() {},
+  async exists() {
+    return true;
+  },
+  async getPlayUrl(key: string) {
+    return `stub://${key}`;
+  },
+};
 
 interface Opts {
   /** 库里存在的台词 id；默认 1～100 */
@@ -67,6 +79,7 @@ function setup(opts: Opts = {}) {
     shares,
     lines,
     play,
+    storage: testStorage,
     publicBaseUrl: 'https://example.com/',
     genId: () => queue.shift() ?? 'ZZZZZZZZ',
   });
@@ -147,6 +160,7 @@ test('读取：已不存在的台词被略过；全部不存在时 404 且不计
     },
     lines,
     play: {} as PlayService,
+    storage: testStorage,
     publicBaseUrl: 'https://x.test',
   });
   assert.deepEqual((await reader.get('abcd1234')).items.map((i) => i.id), [1, 3]);
@@ -155,6 +169,7 @@ test('读取：已不存在的台词被略过；全部不存在时 404 且不计
     shares: { insert: async () => true, findById: async (id) => live.store.get(id) ?? null, incrementView: async () => {} },
     lines: { findByIds: async () => [] } as unknown as LinesRepo,
     play: {} as PlayService,
+    storage: testStorage,
     publicBaseUrl: 'https://x.test',
   });
   await assert.rejects(gone.get('abcd1234'), { status: 404, code: 'NOT_FOUND' });

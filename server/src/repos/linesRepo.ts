@@ -18,6 +18,8 @@ export interface SearchHit {
   en: string;
   zh: string;
   hasVideo: boolean;
+  /** R2 key，如 tbbt/frames/12345.jpg；无缩略图时为 null */
+  frameKey: string | null;
 }
 
 export interface ContextLine {
@@ -91,6 +93,7 @@ interface SearchRow {
   en: string;
   zh: string;
   has_video: boolean;
+  frame_key: string | null;
 }
 
 function toHit(r: SearchRow): SearchHit {
@@ -107,6 +110,7 @@ function toHit(r: SearchRow): SearchHit {
     en: r.en,
     zh: r.zh,
     hasVideo: r.has_video,
+    frameKey: r.frame_key,
   };
 }
 
@@ -173,7 +177,8 @@ export function createLinesRepo(db: Db): LinesRepo {
         db.query<SearchRow>(
           `SELECT l.id, e.season, e.episode, e.title_en, e.title_zh,
                   l.start_ms, l.end_ms, l.en, l.zh,
-                  (e.video_key IS NOT NULL) AS has_video
+                  (e.video_key IS NOT NULL) AS has_video,
+                  l.frame_key
            FROM lines l
            JOIN episodes e ON e.id = l.episode_id
            WHERE ${where}
@@ -202,7 +207,8 @@ export function createLinesRepo(db: Db): LinesRepo {
       const res = await db.query<SearchRow>(
         `SELECT l.id, e.season, e.episode, e.title_en, e.title_zh,
                 l.start_ms, l.end_ms, l.en, l.zh,
-                (e.video_key IS NOT NULL) AS has_video
+                (e.video_key IS NOT NULL) AS has_video,
+                l.frame_key
          FROM lines l
          JOIN episodes e ON e.id = l.episode_id
          WHERE l.id = ANY($1::bigint[])`,
@@ -217,7 +223,8 @@ export function createLinesRepo(db: Db): LinesRepo {
       const res = await db.query<SearchRow>(
         `SELECT l.id, e.season, e.episode, e.title_en, e.title_zh,
                 l.start_ms, l.end_ms, l.en, l.zh,
-                true AS has_video
+                true AS has_video,
+                l.frame_key
          FROM lines l
          JOIN episodes e ON e.id = l.episode_id
          WHERE e.video_key IS NOT NULL

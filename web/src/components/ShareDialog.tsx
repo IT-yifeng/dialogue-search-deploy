@@ -1,7 +1,8 @@
 import { useMutation } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
-import { ApiError } from '../api/client';
 import { createShare } from '../api/shares';
+import { formatApiErrorMessage } from '../lib/errorMessage';
+import { trackEngagement } from '../lib/trackEngagement';
 import type { CreateShareResponse, SearchItem } from '../api/types';
 import { buildShareText, copyToClipboard } from '../lib/copyText';
 import { pickDisplayLines } from '../lib/displayLines';
@@ -75,13 +76,16 @@ export function ShareDialog({ onClose }: Props) {
         onSuccess: (res) => {
           setShared(snapshot);
           setResult(res);
+          trackEngagement({ kind: 'share' });
         },
       },
     );
   };
 
   const copy = async (kind: CopyKind, text: string) => {
-    setCopied({ kind, ok: await copyToClipboard(text) });
+    const ok = await copyToClipboard(text);
+    setCopied({ kind, ok });
+    if (ok) trackEngagement({ kind: 'copy' });
   };
 
   const backToEdit = () => {
@@ -90,14 +94,7 @@ export function ShareDialog({ onClose }: Props) {
     mutation.reset();
   };
 
-  const error = mutation.error;
-  // 400 是请求本身有问题（如某条台词已不存在），后端的文案对用户有用，直接展示；其余按通用故障处理
-  const errorMessage =
-    error instanceof ApiError && error.status >= 400 && error.status < 500
-      ? error.message
-      : error instanceof ApiError && error.code === 'NETWORK'
-        ? '无法连接服务器，请检查网络后重试'
-        : '服务出错了，请稍后重试';
+  const errorMessage = formatApiErrorMessage(mutation.error);
 
   return (
     <dialog

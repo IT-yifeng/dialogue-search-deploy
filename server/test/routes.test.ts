@@ -65,7 +65,7 @@ function setup(opts: {
       return [{ season: 1, episode: 1, titleEn: 'A', titleZh: '甲', hasVideo: true }];
     },
   };
-  const service = createSearchService(lines, episodes);
+  const service = createSearchService(lines, episodes, storage);
   // 与 index.ts 保持同样的挂载方式与错误处理
   const app = new Hono();
   app.onError(errorHandler);
@@ -142,11 +142,29 @@ test('search：多词 AND 无结果时放宽为 OR 并 relaxed', async () => {
     en: 'x',
     zh: 'y',
     hasVideo: true,
+    frameKey: null,
   };
   const { app, spy } = setup({ secondSearch: { total: 1, items: [hit] } });
   const res = await app.request('/api/search?q=a+b');
   assert.equal(res.status, 200);
-  assert.deepEqual(await res.json(), { total: 1, page: 1, pageSize: 20, relaxed: true, items: [hit] });
+  assert.deepEqual(await res.json(), {
+    total: 1,
+    page: 1,
+    pageSize: 20,
+    relaxed: true,
+    items: [
+      {
+        id: hit.id,
+        episode: hit.episode,
+        startMs: hit.startMs,
+        endMs: hit.endMs,
+        en: hit.en,
+        zh: hit.zh,
+        hasVideo: hit.hasVideo,
+        thumbnailUrl: null,
+      },
+    ],
+  });
   assert.equal(spy.searchCalls.length, 2);
   assert.equal(spy.searchCalls[0]?.mode, 'and');
   assert.equal(spy.searchCalls[1]?.mode, 'or');
@@ -161,6 +179,7 @@ test('search：多词 AND 有结果时不调 OR', async () => {
     en: 'x',
     zh: 'y',
     hasVideo: true,
+    frameKey: 'tbbt/frames/1.jpg',
   };
   const lines: LinesRepo = {
     async search(p) {
@@ -194,7 +213,7 @@ test('search：多词 AND 有结果时不调 OR', async () => {
       return [{ season: 1, episode: 1, titleEn: 'A', titleZh: '甲', hasVideo: true }];
     },
   };
-  const service = createSearchService(lines, episodes);
+  const service = createSearchService(lines, episodes, storage);
   const app = new Hono();
   app.onError(errorHandler);
   app.notFound(notFoundHandler);
@@ -202,7 +221,24 @@ test('search：多词 AND 有结果时不调 OR', async () => {
   app.route('/api/lines', createLinesRoutes(service, createPlayService(lines, storage)));
   const res = await app.request('/api/search?q=a+b');
   assert.equal(res.status, 200);
-  assert.deepEqual(await res.json(), { total: 1, page: 1, pageSize: 20, relaxed: false, items: [hit] });
+  assert.deepEqual(await res.json(), {
+    total: 1,
+    page: 1,
+    pageSize: 20,
+    relaxed: false,
+    items: [
+      {
+        id: hit.id,
+        episode: hit.episode,
+        startMs: hit.startMs,
+        endMs: hit.endMs,
+        en: hit.en,
+        zh: hit.zh,
+        hasVideo: hit.hasVideo,
+        thumbnailUrl: '/media/tbbt/frames/1.jpg',
+      },
+    ],
+  });
 });
 
 test('search：非法参数返回 400 且不查库', async () => {
@@ -272,6 +308,7 @@ test('line：GET /api/lines/:id 返回单条，与 search items 同形', async (
     en: 'hello',
     zh: '你好',
     hasVideo: true,
+    frameKey: null,
   };
   const lines: LinesRepo = {
     async search() {
@@ -305,14 +342,23 @@ test('line：GET /api/lines/:id 返回单条，与 search items 同形', async (
       return [];
     },
   };
-  const service = createSearchService(lines, episodes);
+  const service = createSearchService(lines, episodes, storage);
   const app = new Hono();
   app.onError(errorHandler);
   app.notFound(notFoundHandler);
   app.route('/api/lines', createLinesRoutes(service, createPlayService(lines, storage)));
   const res = await app.request('/api/lines/42');
   assert.equal(res.status, 200);
-  assert.deepEqual(await res.json(), hit);
+  assert.deepEqual(await res.json(), {
+    id: hit.id,
+    episode: hit.episode,
+    startMs: hit.startMs,
+    endMs: hit.endMs,
+    en: hit.en,
+    zh: hit.zh,
+    hasVideo: hit.hasVideo,
+    thumbnailUrl: null,
+  });
 });
 
 test('line：不存在返回 404', async () => {

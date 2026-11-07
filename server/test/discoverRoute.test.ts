@@ -16,6 +16,7 @@ const hit = (id: number): SearchHit => ({
   en: `sample ${id}`,
   zh: `样例 ${id}`,
   hasVideo: true,
+  frameKey: null,
 });
 
 function setup(rows: SearchHit[]) {
@@ -30,9 +31,14 @@ function setup(rows: SearchHit[]) {
   const app = new Hono();
   app.onError(errorHandler);
   app.notFound(notFoundHandler);
-  app.route('/api/discover', createDiscoverRoutes(createSearchService(lines, episodes)));
+  app.route('/api/discover', createDiscoverRoutes(createSearchService(lines, episodes, null)));
   return { app, calls };
 }
+
+const withThumbNull = (h: SearchHit) => {
+  const { frameKey: _f, ...rest } = h;
+  return { ...rest, thumbnailUrl: null };
+};
 
 test('固定向仓储要 9 条，原样返回 items', async () => {
   const rows = Array.from({ length: 9 }, (_, i) => hit(i + 1));
@@ -40,7 +46,7 @@ test('固定向仓储要 9 条，原样返回 items', async () => {
   const res = await app.request('/api/discover');
   assert.equal(res.status, 200);
   assert.equal(res.headers.get('cache-control'), 'no-store');
-  assert.deepEqual(await res.json(), { items: rows });
+  assert.deepEqual(await res.json(), { items: rows.map(withThumbNull) });
   assert.deepEqual(calls, [DISCOVER_LIMIT]);
 });
 
@@ -49,7 +55,7 @@ test('库存不足 9 条时有多少返回多少', async () => {
   const { app } = setup(rows);
   const res = await app.request('/api/discover');
   assert.equal(res.status, 200);
-  const body = (await res.json()) as { items: SearchHit[] };
+  const body = (await res.json()) as { items: Array<{ hasVideo: boolean }> };
   assert.equal(body.items.length, 2);
   assert.equal(body.items.every((x) => x.hasVideo), true);
 });

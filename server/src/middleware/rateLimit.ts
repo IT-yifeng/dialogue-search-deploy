@@ -11,6 +11,9 @@ export const API_RATE_LIMITS = {
   discoverPerMin: 30,
   lineReadPerMin: 60,
   createSharePerMin: 10,
+  /** 打开分享页；与 line 读同级，防刷 view_count */
+  readSharePerMin: 60,
+  metricsEventsPerMin: 120,
 } as const;
 
 /**
@@ -76,7 +79,6 @@ export function createRateLimit(opts: RateLimitOptions): MiddlewareHandler {
 /**
  * 把 §6 的限流挂到对应路由上。
  * 桶的 key 用路由模板而不是具体 id：否则每次换一个 lineId 就是新桶，扫库不受限。
- * 分享的 GET（读取、分享内播放）留给 M7，这里只限制创建。
  */
 export function mountApiRateLimits(app: Hono, now?: () => number): void {
   const { windowMs } = API_RATE_LIMITS;
@@ -120,4 +122,37 @@ export function mountApiRateLimits(app: Hono, now?: () => number): void {
     if (c.req.method !== 'POST' || c.req.path !== '/api/shares') return next();
     return createShare(c, next);
   });
+
+  const readShare = createRateLimit({
+    windowMs,
+    max: API_RATE_LIMITS.readSharePerMin,
+    now,
+    keyOf: byRoute('GET /api/shares/:id'),
+  });
+  app.use('/api/shares/:id', async (c, next) => {
+    if (c.req.method !== 'GET') return next();
+    // 更具体的 play 子路径有独立桶
+    if (/\/lines\/\d+\/play$/i.test(c.req.path)) return next();
+    return readShare(c, next);
+  });
+
+  app.use(
+    '/api/shares/:id/lines/:lineId/play',
+    createRateLimit({
+      windowMs,
+      max: API_RATE_LIMITS.lineReadPerMin,
+      now,
+      keyOf: byRoute('GET /api/shares/:id/lines/:lineId/play'),
+    }),
+  );
+
+  app.use(
+    '/api/metrics/events',
+    createRateLimit({
+      windowMs,
+      max: API_RATE_LIMITS.metricsEventsPerMin,
+      now,
+      keyOf: byRoute('POST /api/metrics/events'),
+    }),
+  );
 }

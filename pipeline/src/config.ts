@@ -22,6 +22,11 @@ export function videoKeyFor(episodeId: string): string {
   return `${VIDEO_KEY_PREFIX}/${episodeId}.mp4`;
 }
 
+/** 台词缩略图在 R2 / 本地存储里的对象键；与 server 签发 URL 时用的 key 一致 */
+export function frameKeyForLineId(lineId: number): string {
+  return `${VIDEO_KEY_PREFIX}/frames/${lineId}.jpg`;
+}
+
 /**
  * 读取 .env 与 .env.local（后者由 `neon deploy` 生成）。
  * process.loadEnvFile 不会覆盖已存在的变量，所以先读的优先：

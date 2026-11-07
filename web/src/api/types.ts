@@ -15,6 +15,8 @@ export interface SearchItem {
   en: string;
   zh: string;
   hasVideo: boolean;
+  /** 缩略图预签名 URL；管线未跑 thumbnails 或未上传时为 null */
+  thumbnailUrl: string | null;
 }
 
 export interface SearchResponse {

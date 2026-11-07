@@ -2,6 +2,7 @@
 // 只依赖 repo 与 StorageDriver 接口，不关心底层是本地文件夹还是 R2。
 import { AppError, notFound } from '../lib/httpError.js';
 import type { LinesRepo } from '../repos/linesRepo.js';
+import { cachedExists, cachedGetPlayUrl } from '../storage/presignCache.js';
 import type { StorageDriver } from '../storage/types.js';
 
 /** 播放链接有效期：够看完一批结果，又不至于泄露后长期可用（手册 §6：1 小时） */
@@ -36,9 +37,9 @@ export function createPlayService(
       if (info.videoKey === null) throw noVideo();
       // 库里有 video_key 不代表文件真的在（可能还没上传或被删），
       // 提前拦下来，免得前端拿到链接后才在 <video> 里报一个看不懂的错
-      if (!(await storage.exists(info.videoKey))) throw noVideo();
+      if (!(await cachedExists(storage, info.videoKey))) throw noVideo();
 
-      const url = await storage.getPlayUrl(info.videoKey, PLAY_URL_TTL_SEC);
+      const url = await cachedGetPlayUrl(storage, info.videoKey, PLAY_URL_TTL_SEC);
       return {
         url,
         startMs: info.startMs,

@@ -12,6 +12,8 @@ export interface UploadItem {
   key: string;
   localPath: string;
   size: number;
+  /** 默认 video/mp4；缩略图用 image/jpeg */
+  contentType?: string;
 }
 
 export type UploadStatus = 'uploaded' | 'skipped' | 'failed';
@@ -43,7 +45,7 @@ export async function uploadAll(
       if (remote && remote.size === item.size) {
         result = { key: item.key, status: 'skipped' };
       } else {
-        await store.put(item.key, item.localPath, item.size, 'video/mp4');
+        await store.put(item.key, item.localPath, item.size, item.contentType ?? 'video/mp4');
         result = { key: item.key, status: 'uploaded' };
       }
     } catch (e) {

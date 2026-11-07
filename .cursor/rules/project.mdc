@@ -40,3 +40,8 @@ routes ──► services ──► repos ──► db
 - `raw/`、`work/`、视频文件、字幕文件不得进入 git；不要修改 `.gitignore` 来放行它们。
 - `.env` 和任何密钥不得提交，只提交 `.env.example`。
 - 测试只用 `pipeline/test/fixtures/` 里的自编样例，不要把真实台词写进代码或测试。
+
+## 访问模型（手册 §4.2、§6）
+
+- **不实现**站点口令、`POST /api/auth`、`gate` 中间件、`GatePage`；业务 API 与本地 `/media/*` 均**匿名可访问**。
+- 防护依赖私有 R2、域名不外扩、全站 `noindex` / `robots.txt`；滥用由 M6/M7 限流等处理。

@@ -16,6 +16,8 @@ function setup() {
   app.get('/api/lines/:id/context', (c) => c.json({ id: c.req.param('id') }));
   app.post('/api/shares', (c) => c.json({ ok: true }, 201));
   app.get('/api/shares/:id', (c) => c.json({ id: c.req.param('id') }));
+  app.get('/api/shares/:id/lines/:lineId/play', (c) => c.json({ ok: true }));
+  app.post('/api/metrics/events', (c) => c.body(null, 204));
   return {
     app,
     advance(ms: number) {
@@ -59,7 +61,7 @@ test('同一路由换 id 仍是同一个桶', async () => {
   assert.equal((await app.request('/api/lines/99/context')).status, 200);
 });
 
-test('只限制创建分享：GET 分享读取不计数', async () => {
+test('创建分享受限；GET 分享读取有独立桶', async () => {
   const { app } = setup();
   const posts = await statuses(app, API_RATE_LIMITS.createSharePerMin + 1, '/api/shares', {
     method: 'POST',
@@ -68,9 +70,19 @@ test('只限制创建分享：GET 分享读取不计数', async () => {
   });
   assert.equal(posts.filter((s) => s === 201).length, API_RATE_LIMITS.createSharePerMin);
   assert.equal(posts.at(-1), 429);
-  for (let i = 0; i < 20; i++) {
-    assert.equal((await app.request('/api/shares/abcd1234')).status, 200);
+
+  const reads = await statuses(app, API_RATE_LIMITS.readSharePerMin + 1, '/api/shares/abcd1234');
+  assert.ok(reads.slice(0, API_RATE_LIMITS.readSharePerMin).every((s) => s === 200));
+  assert.equal(reads.at(-1), 429);
+});
+
+test('分享内播放与主站 play 分桶', async () => {
+  const { app } = setup();
+  for (let i = 0; i < API_RATE_LIMITS.lineReadPerMin; i++) {
+    assert.equal((await app.request('/api/shares/x/lines/1/play')).status, 200);
   }
+  assert.equal((await app.request('/api/shares/x/lines/2/play')).status, 429);
+  assert.equal((await app.request('/api/lines/2/play')).status, 200);
 });
 
 test('只信 X-Forwarded-For 的最后一跳；窗口过后恢复', async () => {

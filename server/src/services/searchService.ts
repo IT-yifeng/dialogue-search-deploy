@@ -1,8 +1,10 @@
 // 搜索与上下文的业务层：参数规范化、分页换算、组装契约结构（手册 §6）。
 // 这里不碰 SQL（交给 repos），也不碰 HTTP（交给 routes）。
 import { badRequest, notFound } from '../lib/httpError.js';
+import { attachThumbnailUrls, type SearchLineItem } from '../lib/thumbnailUrl.js';
 import type { EpisodeBrief, ContextLine, LinesRepo, SearchHit } from '../repos/linesRepo.js';
 import type { EpisodeListItem, EpisodesRepo } from '../repos/episodesRepo.js';
+import type { StorageDriver } from '../storage/types.js';
 
 // 手册 §5：关键词长度上限 50 字符
 export const MAX_QUERY_LENGTH = 50;
@@ -62,7 +64,7 @@ export interface SearchResult {
   pageSize: number;
   /** 多词 AND 无结果时放宽为 OR 时为 true（exact 模式永为 false） */
   relaxed: boolean;
-  items: SearchHit[];
+  items: SearchLineItem[];
 }
 
 export interface ContextResult {
@@ -72,7 +74,7 @@ export interface ContextResult {
 }
 
 export interface DiscoverResult {
-  items: SearchHit[];
+  items: SearchLineItem[];
 }
 
 export interface SearchService {
@@ -80,12 +82,23 @@ export interface SearchService {
   /** 有视频的台词中随机抽 DISCOVER_LIMIT 条；库存不足时少返回，不报错 */
   discover(): Promise<DiscoverResult>;
   /** 按 id 取一条台词（深链 `?lineId=` 用）；不存在返回 null */
-  getLine(id: number): Promise<SearchHit | null>;
+  getLine(id: number): Promise<SearchLineItem | null>;
   getContext(id: number, before: number, after: number): Promise<ContextResult>;
   listEpisodes(): Promise<EpisodeListItem[]>;
 }
 
-export function createSearchService(lines: LinesRepo, episodes: EpisodesRepo): SearchService {
+export function createSearchService(
+  lines: LinesRepo,
+  episodes: EpisodesRepo,
+  storage: StorageDriver | null = null,
+): SearchService {
+  async function withThumbs(hits: SearchHit[]): Promise<SearchLineItem[]> {
+    if (!storage) {
+      return hits.map(({ frameKey: _f, ...rest }) => ({ ...rest, thumbnailUrl: null }));
+    }
+    return attachThumbnailUrls(hits, storage);
+  }
+
   return {
     async search({ q, season, page, pageSize, exact }) {
       const trimmed = q.trim();
@@ -103,7 +116,7 @@ export function createSearchService(lines: LinesRepo, episodes: EpisodesRepo): S
           mode: 'and',
           exact: true,
         });
-        return { total, page, pageSize, relaxed: false, items };
+        return { total, page, pageSize, relaxed: false, items: await withThumbs(items) };
       }
 
       const terms = splitTermsFromQuery(trimmed);
@@ -116,12 +129,18 @@ export function createSearchService(lines: LinesRepo, episodes: EpisodesRepo): S
           terms,
           mode: 'and',
         });
-        return { total, page, pageSize, relaxed: false, items };
+        return { total, page, pageSize, relaxed: false, items: await withThumbs(items) };
       }
 
       const strict = await lines.search({ ...base, terms, mode: 'and' });
       if (strict.total > 0) {
-        return { total: strict.total, page, pageSize, relaxed: false, items: strict.items };
+        return {
+          total: strict.total,
+          page,
+          pageSize,
+          relaxed: false,
+          items: await withThumbs(strict.items),
+        };
       }
 
       const loose = await lines.search({ ...base, terms, mode: 'or' });
@@ -130,17 +149,19 @@ export function createSearchService(lines: LinesRepo, episodes: EpisodesRepo): S
         page,
         pageSize,
         relaxed: loose.total > 0,
-        items: loose.items,
+        items: await withThumbs(loose.items),
       };
     },
 
     async discover() {
-      return { items: await lines.sampleWithVideo(DISCOVER_LIMIT) };
+      return { items: await withThumbs(await lines.sampleWithVideo(DISCOVER_LIMIT)) };
     },
 
     async getLine(id) {
       const rows = await lines.findByIds([id]);
-      return rows[0] ?? null;
+      const row = rows[0];
+      if (!row) return null;
+      return (await withThumbs([row]))[0] ?? null;
     },
 
     async getContext(id, before, after) {

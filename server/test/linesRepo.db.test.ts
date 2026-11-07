@@ -35,6 +35,7 @@ describe('linesRepo / episodesRepo（真实数据库）', { skip: url ? false : 
     // public 放第二位：pg_trgm 的操作符类装在 public 里，表则建在临时 schema
     await client.query(`SET search_path TO ${schema}, public`);
     await client.query(readFileSync(path.join(import.meta.dirname, '../src/db/migrations/001_init.sql'), 'utf8'));
+    await client.query(readFileSync(path.join(import.meta.dirname, '../src/db/migrations/002_line_frame_key.sql'), 'utf8'));
 
     const addEpisode = async (season: number, episode: number, titleEn: string | null, videoKey: string | null) =>
       (
@@ -102,7 +103,9 @@ describe('linesRepo / episodesRepo（真实数据库）', { skip: url ? false : 
     const [first, second] = r.items as [SearchHit, SearchHit];
     assert.deepEqual(first.episode, { season: 1, episode: 1, titleEn: 'Pilot Sample', titleZh: 'Pilot Sample（中）' });
     assert.equal(first.hasVideo, true);
+    assert.equal(first.frameKey, null);
     assert.equal(second.hasVideo, false);
+    assert.equal(second.frameKey, null);
     assert.equal(typeof first.id, 'number');
     assert.equal(first.startMs, 0);
     assert.equal(first.endMs, 800);

@@ -1,5 +1,6 @@
 // fetch 封装：把后端统一的错误结构 { error: { code, message } } 转成 ApiError，
 // 这样上层只需要处理一种异常，不用到处判断 res.ok。
+import { getAnalyticsSessionId } from '../lib/analyticsSession';
 
 export class ApiError extends Error {
   constructor(
@@ -8,6 +9,8 @@ export class ApiError extends Error {
     message: string,
     /** HTTP 状态码；网络层失败时为 0 */
     readonly status: number,
+    /** 429 时来自 Retry-After（秒） */
+    readonly retryAfterSeconds?: number,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -27,10 +30,18 @@ interface ErrorBody {
   error?: { code?: string; message?: string };
 }
 
+function sessionHeaders(): Record<string, string> {
+  const id = getAnalyticsSessionId();
+  return id ? { 'X-Session-Id': id } : {};
+}
+
 async function request<T>(path: string, init: RequestInit): Promise<T> {
   let res: Response;
   try {
-    res = await fetch(path, { ...init, headers: { Accept: 'application/json', ...init.headers } });
+    res = await fetch(path, {
+      ...init,
+      headers: { Accept: 'application/json', ...sessionHeaders(), ...init.headers },
+    });
   } catch (err) {
     // 主动取消（切换关键词时 Query 会取消旧请求）要原样抛出，不能当成“网络错误”展示
     if (err instanceof DOMException && err.name === 'AbortError') throw err;
@@ -40,12 +51,16 @@ async function request<T>(path: string, init: RequestInit): Promise<T> {
   if (!res.ok) {
     // 后端挂了时网关可能返回 HTML，解析失败就退回通用文案
     const body = (await res.json().catch(() => null)) as ErrorBody | null;
+    const retryRaw = res.headers.get('Retry-After');
+    const retryAfter = retryRaw !== null ? Number(retryRaw) : undefined;
     throw new ApiError(
       body?.error?.code ?? 'UNKNOWN',
       body?.error?.message ?? `请求失败（${res.status}）`,
       res.status,
+      retryAfter !== undefined && Number.isFinite(retryAfter) ? retryAfter : undefined,
     );
   }
+  if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
 }
 

@@ -71,6 +71,13 @@ export const CopyIcon = (p: IconProps) => (
   </svg>
 );
 
+export const CameraIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M4 8h3l1.5-2h7L17 8h3a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V10a2 2 0 0 1 2-2Z" />
+    <circle cx="12" cy="14" r="3.5" />
+  </svg>
+);
+
 export const SunIcon = (p: IconProps) => (
   <svg {...base(p)}>
     <circle cx="12" cy="12" r="4" />

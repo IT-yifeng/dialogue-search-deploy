@@ -37,6 +37,10 @@ function toItem(v: unknown): SearchItem | null {
   ) {
     return null;
   }
+  const thumb = o.thumbnailUrl;
+  if (thumb !== undefined && thumb !== null && typeof thumb !== 'string') {
+    return null;
+  }
   return {
     id: o.id,
     episode: { season: ep.season, episode: ep.episode, titleEn: ep.titleEn, titleZh: ep.titleZh },
@@ -45,6 +49,7 @@ function toItem(v: unknown): SearchItem | null {
     en: o.en,
     zh: o.zh,
     hasVideo: o.hasVideo,
+    thumbnailUrl: thumb === undefined || thumb === null ? null : thumb,
   };
 }
 

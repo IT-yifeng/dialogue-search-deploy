@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import type { SearchItem } from '../api/types';
 import { fetchDiscover } from '../api/search';
+import { formatApiErrorMessage } from '../lib/errorMessage';
 import { FilmIcon, LanguagesIcon, LayersIcon, SparkIcon } from './icons';
 import { DiscoverGrid } from './DiscoverGrid';
 import { SearchBar } from './SearchBar';
@@ -17,8 +18,8 @@ const EXAMPLES = [
 
 const FEATURES = [
   { Icon: LanguagesIcon, title: '中英对照', desc: '每条台词同时显示英文和中文，也可以只看一种。' },
-  { Icon: FilmIcon, title: '点一下就播放', desc: '在卡片里直接播放那一句，播完自动停下。' },
-  { Icon: LayersIcon, title: '展开上下文', desc: '看前后几句，从任意一句接着播。' },
+  { Icon: FilmIcon, title: '点一下就播放', desc: '点卡片打开片段，自动播放那一句。' },
+  { Icon: LayersIcon, title: '展开上下文', desc: '在蒙版里看前后几句并切换播放。' },
 ];
 
 interface Props {
@@ -36,8 +37,9 @@ export function Hero({ value, onSubmit, mode, highlightTerms, onDiscoverPick }: 
   const discover = useQuery({
     queryKey: ['discover'],
     queryFn: ({ signal }) => fetchDiscover(signal),
+    // 每次进首页仍会因 staleTime=0 重抽，但同一会话内切换路由不必反复打满 discover
     staleTime: 0,
-    gcTime: 0,
+    gcTime: 5 * 60 * 1000,
   });
 
   return (
@@ -89,7 +91,18 @@ export function Hero({ value, onSubmit, mode, highlightTerms, onDiscoverPick }: 
         ))}
       </ul>
 
-      {discover.isError ? null : discover.data && discover.data.items.length > 0 ? (
+      {discover.isError ? (
+        <div className="mt-14 rounded-card border border-danger/30 bg-danger-soft px-4 py-6 text-center text-sm text-danger">
+          <p>{formatApiErrorMessage(discover.error, '推荐加载失败')}</p>
+          <button
+            type="button"
+            onClick={() => void discover.refetch()}
+            className="mt-3 rounded-pill border border-danger/40 bg-surface px-4 py-1.5 font-medium transition hover:bg-danger-soft active:scale-[0.98]"
+          >
+            重试
+          </button>
+        </div>
+      ) : discover.data && discover.data.items.length > 0 ? (
         <DiscoverGrid
           lines={discover.data.items}
           terms={highlightTerms}

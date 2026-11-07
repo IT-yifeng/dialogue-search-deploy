@@ -184,7 +184,15 @@ export function ResultCard({ line, mode, terms, onOpenOverlay }: Props) {
       )}
 
       {contextOpen && (
-        <ContextDrawer lineId={line.id} mode={mode} terms={terms} canPlay={line.hasVideo} onPlay={startClip} />
+        <ContextDrawer
+          lineId={line.id}
+          mode={mode}
+          terms={terms}
+          canPlay={line.hasVideo}
+          onPlay={(id, range) => {
+            if (id === line.id) startClip(range);
+          }}
+        />
       )}
     </li>
   );

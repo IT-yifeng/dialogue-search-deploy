@@ -1,6 +1,6 @@
 // 搜索页的几种非“有结果”状态：无结果、页码越界、错误。
 // 空搜索的首页见 Hero.tsx。
-import { ApiError } from '../api/client';
+import { canRetryApiError, formatApiErrorMessage } from '../lib/errorMessage';
 import { AlertIcon, SearchIllustration } from './icons';
 
 const primaryBtn =
@@ -34,13 +34,8 @@ export function PageOutOfRange({ onBack }: { onBack: () => void }) {
 }
 
 export function ErrorBar({ error, onRetry }: { error: unknown; onRetry: () => void }) {
-  // 4xx 说明请求本身有问题，重试没用，提示改关键词；其余视为服务或网络故障
-  const isBadRequest = error instanceof ApiError && error.status >= 400 && error.status < 500;
-  const message = isBadRequest
-    ? '关键词不合法，请修改后再搜'
-    : error instanceof ApiError && error.code === 'NETWORK'
-      ? '无法连接服务器，请检查网络后重试'
-      : '服务出错了，请稍后重试';
+  const message = formatApiErrorMessage(error, '搜索失败，请稍后重试');
+  const showRetry = canRetryApiError(error);
 
   return (
     <div
@@ -51,7 +46,7 @@ export function ErrorBar({ error, onRetry }: { error: unknown; onRetry: () => vo
         <AlertIcon className="shrink-0 text-lg" />
         {message}
       </span>
-      {!isBadRequest && (
+      {showRetry && (
         <button
           type="button"
           onClick={onRetry}

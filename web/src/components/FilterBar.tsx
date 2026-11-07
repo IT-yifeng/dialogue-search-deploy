@@ -23,7 +23,7 @@ export function FilterBar({ season, exact, seasons, total, onSeasonChange, onExa
   const totalLabel = total !== undefined ? formatResultTotal(total) : '';
 
   return (
-    <div className="flex items-center justify-between gap-3 text-sm text-ink-sub">
+    <div className="flex flex-col gap-3 text-sm text-ink-sub sm:flex-row sm:items-center sm:justify-between">
       {/* 原生 <select> 外面包一层胶囊：保留系统自带的无障碍与移动端选择器，只改外观 */}
       <div className="flex flex-wrap items-center gap-2">
         <label

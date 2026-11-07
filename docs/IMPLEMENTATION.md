@@ -60,21 +60,24 @@ dialogue_search/
 │  │  │  ├─ episodes.ts      # GET /api/episodes
 │  │  │  ├─ media.ts         # GET/HEAD /media/*：仅本地开发（STORAGE_DRIVER=local），支持 Range
 │  │  │  ├─ shares.ts        # POST /api/shares、GET /api/shares/:id、GET /api/shares/:id/lines/:lineId/play
+│  │  │  ├─ metrics.ts       # POST /api/metrics/events（M7）
 │  │  │  └─ static.ts        # 托管前端静态文件，SPA 回退到 index.html（目录不存在则不挂载）
 │  │  ├─ services/           # 业务层：组合仓储与存储，含排序、限额等规则
 │  │  │  ├─ searchService.ts
 │  │  │  ├─ playService.ts   # 计算片段起止、签发播放 URL
-│  │  │  └─ shareService.ts  # 生成短 ID、校验数量上限
+│  │  │  ├─ shareService.ts  # 生成短 ID、校验数量上限
+│  │  │  └─ metricsService.ts # M7 埋点校验与写入
 │  │  ├─ repos/              # 仓储层：只写 SQL，返回领域对象
 │  │  │  ├─ linesRepo.ts
 │  │  │  ├─ episodesRepo.ts
-│  │  │  └─ sharesRepo.ts
+│  │  │  ├─ sharesRepo.ts
+│  │  │  └─ metricsRepo.ts   # M7：search_metrics / engagement_events
 │  │  ├─ storage/            # 素材存储抽象（本地开发用 local，线上用 r2）
 │  │  │  ├─ types.ts         # StorageDriver 接口
 │  │  │  ├─ localDriver.ts
 │  │  │  └─ r2Driver.ts
 │  │  ├─ middleware/
-│  │  │  └─ rateLimit.ts     # M6：内存限流（单实例够用；按 IP / 路径，与「无口令」并存）
+│  │  │  └─ rateLimit.ts     # M6/M7：内存限流（单实例够用；按 IP / 路径，与「无口令」并存）
 │  │  ├─ db/
 │  │  │  ├─ client.ts        # Postgres 连接池
 │  │  │  ├─ migrate.ts       # 迁移执行器（npm run db:migrate，M1 引入，走直连地址）
@@ -210,6 +213,8 @@ async function playClip(video: HTMLVideoElement, startMs: number, endMs: number)
 
 ```
 raw/video  ──S1 转码──► work/mp4/S01E01.mp4 ──S5 上传──► R2: tbbt/S01E01.mp4
+                                    │
+                                    └──S5.5 thumbnails──► R2: tbbt/frames/<lineId>.jpg + lines.frame_key
 raw/subs   ──S2 清洗/校时──► S3 中英对齐 ──S4 入库──► Postgres (lines/episodes)
                                           └──S6 QA 报告──► work/qa-report.md
 ```
@@ -221,6 +226,7 @@ raw/subs   ──S2 清洗/校时──► S3 中英对齐 ──S4 入库──
 | S3 对齐 | 同上 | 中英文按时间重叠对齐（`align.ts`） |
 | S4 入库 | 同上 | 以「季 + 集」做 upsert，可重复运行，不产生重复数据 |
 | S5 上传 | `... upload` | 已存在的对象跳过，可断点续传 |
+| S5.5 缩略图 | `... thumbnails [--only S01E01] [--force]` | 对库里有 `video_key` 的每一集，从 `work/mp4/<SxxExx>.mp4` 在台词中点截一帧 JPEG，上传到 R2（`STORAGE_DRIVER=r2`）或复制到 `work/mp4`（local），并 `UPDATE lines SET frame_key = 'tbbt/frames/<id>.jpg'`。已存在则跳过，除非 `--force`。需先 `npm run db:migrate`（`002_line_frame_key.sql`） |
 | S6 QA | `... qa` | 输出每集：台词数、中英都有的比例、时间戳是否递增、与视频时长的偏差 |
 
 转码命令（写进 `ffmpeg.ts`）：
@@ -293,6 +299,7 @@ CREATE TABLE lines (
   end_ms     INT NOT NULL,
   en         TEXT NOT NULL DEFAULT '',
   zh         TEXT NOT NULL DEFAULT '',
+  frame_key  TEXT,                   -- 可选；台词缩略图在对象存储中的 key，如 tbbt/frames/12345.jpg（迁移 002）
   UNIQUE (episode_id, idx),
   CHECK (end_ms > start_ms)
 );
@@ -307,10 +314,35 @@ CREATE TABLE shares (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   view_count INT NOT NULL DEFAULT 0
 );
+
+-- M7 轻量埋点（迁移 003_metrics.sql）
+CREATE TABLE search_metrics (
+  id           BIGSERIAL PRIMARY KEY,
+  session_id   TEXT,                -- 前端 X-Session-Id；缺失时为 NULL（仍计入零结果率，不参与北极星分母）
+  q            TEXT NOT NULL,
+  exact        BOOLEAN NOT NULL,
+  season       INT,
+  result_total INT NOT NULL,
+  relaxed      BOOLEAN NOT NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX search_metrics_created_at ON search_metrics (created_at);
+CREATE INDEX search_metrics_session_id ON search_metrics (session_id) WHERE session_id IS NOT NULL;
+
+CREATE TABLE engagement_events (
+  id          BIGSERIAL PRIMARY KEY,
+  session_id  TEXT NOT NULL,
+  kind        TEXT NOT NULL CHECK (kind IN ('play', 'select', 'share', 'copy')),
+  line_id     BIGINT,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX engagement_events_session_id ON engagement_events (session_id);
+CREATE INDEX engagement_events_created_at ON engagement_events (created_at);
 ```
 
 - 单字符中文（如「钱」）搜索时 trigram 索引帮不上忙，会退化成全表扫描。8 万行约几十毫秒，可以接受。
 - 搜索入口强制要求关键词至少 1 个字符，且长度上限 50 个字符。
+- **北极星（F10）SQL 口径**（MVP）：分母 = 时间窗内 `search_metrics` 中 **distinct `session_id` 非 NULL**；分子 = 上述 session 中在 `engagement_events` 至少有一条（`play` / `select` / `share` / `copy` 任一）。零结果率 = `result_total = 0` 占比；`exact` 使用率 = `exact = true` 占比。`play` 以视频进入 `playing` 为准（前端上报）。
 
 ## 6. API 契约
 
@@ -327,6 +359,29 @@ CREATE TABLE shares (
 | `POST /api/shares` | 请求 `{lineIds: number[], note?: string}` | 1～20 条；返回 201 `{id, url}`；需通过限流（M6/M7） |
 | `GET /api/shares/:id` | 凭链接访问 | 返回留言与台词列表（不含播放 URL）；每次成功读取 `view_count + 1`；限流（M7） |
 | `GET /api/shares/:id/lines/:lineId/play` | 分享上下文内播放 | 仅当 `lineId` 属于该分享才签发播放 URL，返回结构与 `/api/lines/:id/play` 相同；不计浏览量；限流（M7） |
+| `POST /api/metrics/events` | 取用事件批量上报 | 见下文；限流 120 次/分钟/IP |
+
+**请求头（M7 埋点）**：前端对业务 `fetch` 附带可选 `X-Session-Id`（UUID，存于 `sessionStorage`）。`GET /api/search` 成功后服务端写入 `search_metrics`（`session_id` 可空）；失败搜索不写库。
+
+**按 IP + 路由限流（60 秒固定窗口，单实例内存）**：
+
+| 路由 | 阈值/分钟 |
+|---|---|
+| `GET /api/search` | 60 |
+| `GET /api/discover` | 30 |
+| `GET /api/lines/:id/play`、`GET /api/lines/:id/context` | 60（同桶按路由模板，不按具体 id） |
+| `POST /api/shares` | 10 |
+| `GET /api/shares/:id` | 60 |
+| `GET /api/shares/:id/lines/:lineId/play` | 60 |
+| `POST /api/metrics/events` | 120 |
+
+超限返回 **429**，响应头 `Retry-After`（秒），body `error.code` = `RATE_LIMITED`。
+
+```jsonc
+// POST /api/metrics/events
+{ "sessionId": "550e8400-e29b-41d4-a716-446655440000", "events": [{ "kind": "play", "lineId": 12345 }] }
+// 204 无 body；events 1～20 条；kind 枚举 play|select|share|copy；lineId 可选正整数
+```
 
 ```jsonc
 // POST /api/shares  请求
@@ -344,7 +399,8 @@ CREATE TABLE shares (
     "episode": { "season": 2, "episode": 5, "titleEn": "...", "titleZh": "..." },
     "startMs": 123400, "endMs": 125900,
     "en": "...", "zh": "...",
-    "hasVideo": true
+    "hasVideo": true,
+    "thumbnailUrl": "https://...signed..."   // 有 frame_key 且对象存在时为预签名 JPEG；否则 null
   }]
 }
 ```
@@ -363,7 +419,8 @@ CREATE TABLE shares (
     "episode": { "season": 2, "episode": 5, "titleEn": "...", "titleZh": "..." },
     "startMs": 123400, "endMs": 125900,
     "en": "Bazinga!", "zh": "巴辛嘎！",
-    "hasVideo": true
+    "hasVideo": true,
+    "thumbnailUrl": "https://...signed..."
   }]
 }
 ```
@@ -376,7 +433,8 @@ CREATE TABLE shares (
   "episode": { "season": 2, "episode": 5, "titleEn": "...", "titleZh": "..." },
   "startMs": 123400, "endMs": 125900,
   "en": "Bazinga!", "zh": "巴辛嘎！",
-  "hasVideo": true
+  "hasVideo": true,
+  "thumbnailUrl": "https://...signed..."
 }
 ```
 
@@ -429,9 +487,9 @@ CREATE TABLE shares (
 
 ### 7.2 搜索页结构
 
-**空态（无关键词）是 hero 首页**：顶栏只有 logo、语言切换、主题切换；中央依次是胶囊标签、大标题、副标题、大号搜索框（主按钮嵌在右侧）、带语种标注的示例词胶囊、三项能力简介。**其下为「随机推荐」区**（设计稿 `06-discovery-grid`）：共 **9** 张片段卡，排成响应式网格（桌面端多为 3×3）。每张卡以该台词对应时刻的**视频画面**为底图（见 §7.9）：用 `<video>` 设 `currentTime` 到中点并暂停，**不用** canvas 截图（R2 预签名为跨域资源时 canvas 会被污染，导出的 data URL 为空）；**左上角**叠放角标，标明所属 **季** 与 **集**（文案格式如 `S02 · E05`）；**卡片下半部**叠放该行台词的**英文一行 + 中文一行**（九宫格卡与**片段蒙版**均固定双语叠在画面上；顶栏「英 / 中 / 双语」主要作用于**关键词高亮**、分享页等处）。数据来自 `GET /api/discover`；进入页面时拉取一次即可，不要求无限滚动。
+**空态（无关键词）是 hero 首页**：顶栏只有 logo、语言切换、主题切换；中央依次是胶囊标签、大标题、副标题、大号搜索框（主按钮嵌在右侧）、带语种标注的示例词胶囊、三项能力简介。**其下为「随机推荐」区**（设计稿 `06-discovery-grid`）：共 **9** 张片段卡，排成响应式网格（桌面端多为 3×3）。每张卡以该台词对应时刻的**视频画面**为底图（见 §7.9）：优先 `thumbnailUrl`，否则用 `<video>` 设 `currentTime` 到中点并暂停，**不用** canvas 截图（R2 预签名为跨域资源时 canvas 会被污染，导出的 data URL 为空）；**左上角**叠放角标，标明所属 **季** 与 **集**（文案格式如 `S02 · E05`）；**画面下方独立黑底字幕条**固定展示**英文 + 中文**各至多两行（与顶栏「英 / 中 / 双语」无关，语言切换主要作用于**关键词高亮**、分享页等处）。数据来自 `GET /api/discover`；进入页面时拉取一次即可，不要求无限滚动。
 
-有关键词后变为下面的结果页，搜索框收进吸顶顶栏；**本实现**采用与推荐区**同构的九宫格**（`SearchResultGrid` + `SnippetCard`，每页最多 `pageSize` 张，默认 20，仍为响应式 3×2 / 3×3 等）；卡片底部条保留 **勾选、查看片段、播放、上下文**（与旧版列表卡能力对齐）。
+有关键词后变为下面的结果页，搜索框收进吸顶顶栏；**本实现**采用与推荐区**同构的九宫格**（`SearchResultGrid` + `SnippetCard`，每页最多 `pageSize` 张，默认 20，仍为响应式 3×2 / 3×3 等）；卡片底部操作条保留 **勾选、播放、上下文**（不再在卡片内嵌播放器；播放统一在片段蒙版内进行）。
 
 ```
 ┌────────────────────────────────────────────┐
@@ -439,7 +497,7 @@ CREATE TABLE shares (
 │ 季：[全部 ▾]            共 37 条结果          │  ← 筛选与统计
 ├────────────────────────────────────────────┤
 │  ┌────┐ ┌────┐ ┌────┐   ← 九宫格片段卡（同 06）    │
-│  │视频│ │视频│ │视频│   底：英+中；条：勾选/查看/播/上下文 │
+│  │视频│ │视频│ │视频│   底：英+中；条：勾选/播放/上下文 │
 │  └────┘ └────┘ └────┘                            │
 ├────────────────────────────────────────────┤
 │  上一页  1 2 3 …  下一页                     │
@@ -447,7 +505,7 @@ CREATE TABLE shares (
         已选 3 条 [预览/分享] [清空]   ← 底部悬浮条，有勾选才出现
 ```
 
-**带关键词时的结果页（九宫格 + 片段蒙版，设计稿 `07-search-result-overlay`）**：用户点击卡片**上方画面区**或 **「查看片段」** 后，在当前页上方打开蒙版（与推荐区一致）。蒙版内以**大尺寸 16:9 视频静帧**（同 §7.9）+ **左上当季集角标** + **画面底部渐变条上叠英文、中文两行**（不在视频下方单独开一块白/黑字幕区）；再往下是 **「上一条」「下一条」**、**「复制链接」**；导航范围仍为**当前页的 `items`**，含分页语义（末条「下一条」翻到下一页首条等，与此前实现一致）。深链 `?lineId=` 行为不变。
+**带关键词时的结果页（九宫格 + 片段蒙版，设计稿 `07-search-result-overlay`）**：用户点击卡片**画面区**或 **「播放」** 后打开蒙版并自动播**该句**片段；点 **「上下文」** 打开蒙版后默认播**上下文窗口合并片段**（当前句 ± 前后各 2 句的起止合并区间，`contextClipRange`），并展开列表。蒙版 **16:9 区内** `ClipPlayer` 播放；**英文 + 中文两行字幕居中叠在画面底部**（`VideoSubtitleOverlay`，略高于原生控制条），100% 缩放下无需滚动即可看到双语。列表在视频区下方限高滚动，点任一句改为播该句并更新悬浮字幕。底栏 **「上一条」「下一条」**、顶栏 **「复制链接」**；导航范围仍为当前页 `items`。深链 `?lineId=` 不变；列表选中其他句时同步 URL。
 
 ### 7.3 交互细节
 
@@ -455,20 +513,20 @@ CREATE TABLE shares (
 |---|---|
 | 提交搜索 | 回车或点按钮；URL 同步为 `/?q=...&season=...&exact=1&page=...`，可刷新、可分享、可回退 |
 | 空搜索 | 不请求列表接口；显示热门示例词（如 Bazinga、Penny、Sheldon），点击即搜；同时请求 `GET /api/discover` 填满 9 张推荐卡（失败时该区域显示占位或隐藏，不出现整页白屏） |
-| 推荐卡点击 | 与搜索结果的片段蒙版一致：打开蒙版，默认定位到该条，可在蒙版内用「上一条 / 下一条」浏览（此时「下一条」在 9 条推荐集合内循环或到达末尾禁用，实现时二选一并在 PR 说明） |
-| 搜索结果 → 片段蒙版 | 点击九宫格卡片**画面区**或「查看片段」打开蒙版（见 §7.2 `07`）；**上一条 / 下一条**仅在当前页结果序列中移动；**复制链接**复制当前条的 `?lineId=` 深链 |
+| 推荐卡点击 | 与搜索结果的片段蒙版一致：打开蒙版并**自动播放**该句片段，默认定位到该条，可在蒙版内用「上一条 / 下一条」浏览（推荐区 9 条内循环） |
+| 搜索结果 → 片段蒙版 | **播放**：蒙版播当前句，双语字幕叠在画面底中央；**上下文**：默认可播合并上下文片段并展开列表，点列表中任一句改为播该句；**上一条 / 下一条**仅在当前页结果序列中移动；**复制链接**复制当前条的 `?lineId=` 深链 |
 | 无结果 | 提示「没有找到」，附带建议：少写几个词、换成中文或英文；永不出现空白页（乱码输入也要在 600ms 内给出提示或兜底结果） |
 | 弱相关兜底 | 接口返回 `relaxed: true` 时，列表顶部显示一条提示：「没有同时包含全部关键词的台词，下面是包含部分词的结果」 |
 | 仅完整台词 | 搜索栏旁一个开关，开启后加 `exact=1`；结果是默认结果的子集。结果数超过 2000 条时，在结果顶部提示「结果较多，试试仅完整台词」 |
 | 结果数文案 | ≤ 5000 显示「N 条结果」；5000～30000 显示「5,000+ 条」；超过 30000 显示「海量结果」（阈值可调） |
 | 高亮 | 关键词在英文和中文里都高亮；高亮前先做 HTML 转义，防注入 |
-| 语言切换 | 三态（英 / 中 / 双语），存入 `localStorage`，默认双语；**九宫格与片段蒙版画面上的字幕**固定英+中两行（§7.2）；语言切换主要影响**关键词高亮**、分享页等 |
-| 播放 | 点击「播放」在卡片内展开播放器，自动播放；**同一时刻只允许一个播放器**，开新的会关闭旧的；播放到结束时间自动暂停，按钮变成「重播」 |
-| 上下文 | 展开显示前后各 2 句，当前句高亮，点任意一句可以从那里播放 |
+| 语言切换 | 三态（英 / 中 / 双语），存入 `localStorage`，默认双语；**九宫格字幕条与片段蒙版画面内悬浮字幕**固定英+中两行（§7.2）；语言切换主要影响**关键词高亮**、分享页等 |
+| 播放 | 点击卡片画面或 **「播放」** 打开片段蒙版，`ClipPlayer` 自动播放该句；蒙版内同一时间只有一个播放器；播到 `endMs` 自动暂停，可用原生视频控件重播 |
+| 上下文 | 搜索卡点 **「上下文」**：蒙版先播**合并的上下文视频区间**，再展示前后各 2 句列表；播放中按 `video.currentTime` 用 `lineAtTimeMs` **切换画面内双语字幕**，列表高亮随播放头移动；点列表某句改为播该句单段 |
 | 勾选 | 点击卡片左上角的复选框；**勾选跨搜索、跨分页保留**（存 Zustand，并同步到 `sessionStorage`）；超过 20 条时弹提示并阻止 |
 | 分享 | 点底部「分享」打开对话框：列出已选台词（可移除单条）、可填留言 → 点「生成链接」→ 显示链接，提供「复制链接」和「复制文本（中英对照，附出处）」两个按钮 |
 | 复制文本格式 | 每条三行：英文、中文、`—— 《片名》S02E05 12:03`（片名取自前端常量 `SERIES_TITLE`，目前只有一部剧，不改表）。**出处行不可关闭** |
-| 分享页 | 展示留言与台词列表，每条可播放；底部有「去搜索更多」 |
+| 分享页 | 展示留言与台词列表，每条可播放；播放器上叠 `VideoSubtitleOverlay`（语言跟顶栏）；底部有「去搜索更多」；页脚投诉邮箱来自构建时 `VITE_COMPLAINT_EMAIL`（仓库根 `.env`，见 `web/vite.config` 的 `envDir`） |
 | 加载与错误 | 搜索中显示骨架屏；接口失败显示可重试的错误条；播放链接过期（403）时自动重新请求一次 |
 | 移动端 | 单列；分享对话框改为底部抽屉；播放器宽度撑满；`DiscoverGrid` 为 2 列或 1 列；片段蒙版占满视口，按钮区避免被安全区遮挡 |
 
@@ -488,7 +546,13 @@ sequenceDiagram
   W->>A: GET /api/search?q=...
   A->>D: ILIKE 查询（trigram 索引）
   D-->>A: 台词列表
-  A-->>W: items + total
+  A->>S: 为每条有 frame_key 的台词签发缩略图 URL
+  A-->>W: items（含 thumbnailUrl）+ total
+  opt thumbnailUrl 为空
+    W->>A: GET /api/lines/:id/play
+    A->>S: 预签名整集视频
+    W->>S: <video> seek 到中点（静帧回退）
+  end
   U->>W: 点击「播放」
   W->>A: GET /api/lines/:id/play
   A->>S: 生成预签名 URL
@@ -525,7 +589,7 @@ sequenceDiagram
 | `SnippetCard` | `line`、`terms`、`variant` | 片段卡共用：静帧底图 + 角标 + 固定双语字幕；点击画面上方打开 `SearchResultOverlay` |
 | `ClipPlayer` | `lineId` | 请求播放信息、渲染 `<video>`、到点暂停 |
 | `ContextDrawer` | `lineId` | 展示前后台词 |
-| `SearchResultOverlay` | `lines[]`、`initialIndex`、`onClose` | 蒙版内导航、复制单条深链；16:9 区内 `<video>` 展示 §7.9 静帧，**画面底部叠双语字幕**（固定 `both`，与顶栏语言无关） |
+| `SearchResultOverlay` | `lines[]`、`initialIndex`、`onClose`、`contextOpen` | `ClipPlayer` + `VideoSubtitleOverlay`（画面底中央双语）；`contextOpen` 时播合并上下文区间；上一条/下一条、复制深链 |
 | `SelectionBar` | — | 悬浮条，显示数量与入口 |
 | `ShareDialog` | — | 预览已选、生成链接、复制 |
 
@@ -586,15 +650,15 @@ sequenceDiagram
 
 设计稿 `06`、`07` 的底图来自**台词对应时刻的视频画面**，不是单独海报素材。
 
-- **时刻**：在台词起止的中点定格：\((startMs + endMs) / 2\) 秒，与管线里的时间轴一致。
-- **实现（MVP）**：对每条卡片请求 `GET /api/lines/:id/play` 拿到预签名 URL，在**可见或叠放的** `<video>` 上设置 `currentTime` 后 `pause()`，用视频帧本身作为「关键帧」展示。**不得**依赖 `canvas.drawImage` + `toDataURL` 作为卡片底图：R2 预签名 URL 为跨域资源时，画布会被污染，截图为空。
-- **seek 时机**：不能只在 `loadedmetadata` 上设一次 `currentTime`：部分浏览器在元数据刚到、数据未缓冲时 seek **不落帧**、`seeked` 也可能不来。应结合 `loadeddata` / `canplay` 再设 `currentTime`，监听 `seeked` 与 `timeupdate`，并在 `videoWidth` / `videoHeight` 有效时认为已就绪；可设短超时兜底，避免 loading 转圈卡住。
-- **不要**给用于静帧的 `<video>` 设置 `crossOrigin="anonymous"`（或 `crossorigin`，等价）：在 CORS 模式下，若 R2 桶**未**对预签名 GET 返回 `Access-Control-Allow-Origin`（默认往往如此），整段视频加载会 **失败**（`error`），表现为永远只有渐变、无画面。**静帧只显示像素、不读 canvas，不需要 CORS**；播放用的 `<video>`（`ClipPlayer`）同样不显式设 crossOrigin。
-- **预生成缩略图入库（可选，非 MVP）**：可把管线截好的 JPEG 存 R2、库里只存 key/url，列表用 `<img>`。好处是首屏不重；代价是迁移、存储与管线插帧。**当前不做**：仍以 `<video>` seek 为准。
-- **性能**：TanStack Query 按 `lineId` 缓存 `play` 响应；首屏最多 9～20 路 `<video>` 元数据 + seek，弱网可能略慢，以加载圈为反馈。
-- **失败**：无视频、请求失败、`error` 事件时降级为纯色渐变底，仍显示角标与双语字幕。
+- **时刻（管线与回退一致）**：截帧与 seek 都用台词起止的中点：\((startMs + endMs) / 2\) 毫秒。
+- **主路径（推荐）**：`lines.frame_key` 存对象键（如 `tbbt/frames/<lineId>.jpg`），管线 `thumbnails` 上传 JPEG 后写入。API 在 `GET /api/search`、`GET /api/discover`、`GET /api/lines/:id`、`GET /api/shares/:id` 的每条 `items[]` 上附带 **`thumbnailUrl`**（预签名 GET，有效期与播放链接同量级；本地驱动为 `/media/...`）。前端优先用 **`<img src={thumbnailUrl}>`** 展示底图，不依赖整集视频缓冲与 seek。
+- **对象缺失**：若 `frame_key` 非空但存储里找不到对象，`thumbnailUrl` 为 `null`（避免签发坏链）。
+- **回退路径**：`thumbnailUrl` 为 `null` 时，用 `GET /api/lines/:id/play` 的 URL 在叠放的 `<video>` 上 seek 到中点（见 `useVideoPosterFrame`）。**不得**依赖 `canvas.drawImage` + `toDataURL` 作为卡片底图：跨域视频会污染画布。
+- **seek 回退的细节**：结合 `loadeddata` / `canplay` 设 `currentTime`，监听 `seeked` / `timeupdate`，`videoWidth` / `videoHeight` 有效即认为就绪；短超时兜底。
+- **不要**给用于静帧回退的 `<video>` 设 `crossOrigin="anonymous"`：R2 未配 CORS 时会导致整段加载失败。`<img>` 加载预签名图片不受此限制。
+- **性能**：有 `thumbnailUrl` 时列表只拉小图；回退时才为卡片拉整集元数据 + seek。
 
-> **与 M8 的区别**：M8「导出截图」若仍用 canvas，必须在 R2 桶上配置 **CORS**（允许站点 origin 对视频对象 `GET`），并给用于导出的 `<video>` 设 `crossOrigin="anonymous"`，否则画布被污染；**MVP 静帧路径不依赖**该配置。
+> **与 M8 的区别**：M8「导出截图」若仍用 canvas，必须在 R2 桶上配置 **CORS**（允许站点 origin 对视频对象 `GET`），并给用于导出的 `<video>` 设 `crossOrigin="anonymous"`；**列表缩略图走 JPEG，不依赖**该配置。
 
 ## 8. 部署方案
 
@@ -623,10 +687,11 @@ sequenceDiagram
 
 ```bash
 cp .env.example .env            # 填入 DATABASE_URL 与 R2_* 变量
-npm run db:migrate              # 建表
+npm run db:migrate              # 建表（含 frame_key）
 npm run pipeline -- transcode   # S1
 npm run pipeline -- ingest --clean   # S2～S4
 npm run pipeline -- upload      # S5
+npm run pipeline -- thumbnails  # S5.5：截帧入 R2 + 写 frame_key（可先 --only 单集试跑）
 npm run pipeline -- qa          # S6，看报告，不合格的集修好后重跑
 ```
 
@@ -703,6 +768,11 @@ CMD ["node", "server/dist/index.js"]
 - [ ] 搜索：中文、英文、两个词各试一次。
 - [ ] 播放：随机 3 条，到点自动暂停，能拖动不卡死。
 - [ ] 分享：生成链接，用无痕窗口打开能看能播。
+- [ ] `GET /api/shares/:id` 同一 IP 超限返回 429（可与搜索限流对照表 §6）。
+- [ ] 首页与分享页页脚可见「权利声明 / 投诉」（`VITE_COMPLAINT_EMAIL`）。
+- [ ] 375px 宽手测：搜索、蒙版播放、勾选、分享抽屉可用。
+- [ ] 搜索 P95：预热后 `npm run bench:search -w server`（本地或线上 `BASE`）&lt; 300ms。
+- [ ] 埋点：`npm run db:migrate` 后完成一次搜索 + 取用动作，`search_metrics` / `engagement_events` 有行。
 - [ ] R2 桶确认为私有：直接访问对象 URL 返回 403。
 - [ ] 在 Cloudflare 和 Neon 控制台设好用量提醒。
 
@@ -842,10 +912,11 @@ GitHub Actions：对 `server`、`pipeline` 跑类型检查与测试，对 `web` 
 - 轻量埋点（FeatureList F10）：记录搜索日志（`q`、`exact`、结果数、是否 `relaxed`）和取用事件（播放、勾选、分享、复制）。用来统计零结果率、`exact` 使用率，以及北极星指标「素材被取用率」（有取用动作的会话数 ÷ 搜索会话数）。建表时同步更新 §5。
 
 **M8 · 取帧（可选，对应 FeatureList F3.2 的精简版）**
-- 产出：播放器上增加「截图」按钮，用 `canvas` 截取当前画面导出 JPG；裁切预设：原画幅 / 3:4 / 9:16 / 1:1，默认居中裁切，可左右拖动调整。
-- 前置：给 R2 桶配置 CORS（允许站点域名发起 GET），并给 `<video>` 加 `crossOrigin="anonymous"`，否则画布被污染、无法导出。本地 `localDriver` 同源，无此问题。
+- 产出：仅片段蒙版增加「截图」按钮，用 `canvas` 截取当前画面导出 JPG；裁切预设：原画幅 / 3:4 / 9:16 / 1:1，**默认原画幅**，非原画幅时居中裁切、可左右拖动。
+- 导出图：**不烧录出处**（出处仍只出现在「复制文本」）。画面底部叠放与蒙版一致的**英文 + 中文**台词（渐变底，各至多两行）。
+- 前置：R2 直连时须给桶配置 CORS（允许站点域名 GET）。主播放器**不**设 `crossOrigin`（避免未配 CORS 时无法播放）；截图对跨域地址单独加载带 `crossOrigin` 的视频。本地 `localDriver`（`/media`）同源，可不配 CORS。
 - 不做：自动吸附关键帧、人脸检测、图文梗卡、GIF（这些依赖预抽帧和 ffmpeg，见 §12）。
-- 验收：四种裁切都能导出；导出图带不可关闭的出处文字（与 §7.3 复制文本一致）。
+- 验收：四种裁切都能导出；默认原画幅；图内无出处行，画面底部有中英字幕。
 
 ## 11. 风险与待办
 
@@ -876,7 +947,7 @@ FeatureList 面向公开运营的完整产品；本手册是单剧、自用的 M
 | ✅ 已纳入 | F4.5 回流页、F4.6 强制出处、F8.3 下架通道 | 回流页即分享页 `/s/:id`；出处见 §7.3，下架见 §4.2；不做水印（自用） |
 | ✅ 已纳入 | §B 设计语言（莫兰迪色、圆角、阴影、动效） | §7.8 |
 | ✅ 已纳入 | F10 度量 | M7 轻量埋点 |
-| 🔶 可选 | F3.2 取帧 | M8 精简版（canvas 截图 + 裁切预设） |
+| 🔶 可选 | F3.2 取帧 | M8 精简版（canvas 截图 + 裁切预设；默认原画幅；画面内中英字幕、不烧录出处） |
 | ⏭ 后续 | F1.6 高级筛选、F1.7 联想与热梗、F1.8 容错归一、F1.10 搜索历史 | 其中繁简、全半角归一建议最先做，成本最低 |
 | ⏭ 后续 | F1.5 排序三档中的「热度」「新片」 | MVP 只有相关度；热度要等取用埋点积累数据 |
 | ⏭ 后续 | F3.3 图文梗卡、F3.4 GIF、F3.5 片段下载、F3.6 帧打包 | 需要 ffmpeg 按需生成并缓存，不预先切片 |

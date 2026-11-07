@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { fetchContext } from '../api/lines';
 import { shouldRetry } from '../api/client';
+import { formatApiErrorMessage } from '../lib/errorMessage';
 import { pickDisplayLines, type LangMode } from '../lib/displayLines';
 import { formatTime } from '../lib/formatTime';
 import { HighlightText } from './HighlightText';
@@ -13,10 +14,12 @@ interface Props {
   terms: string[];
   /** 该集没有视频时为 false：仍可查看上下文，但不能点击播放 */
   canPlay: boolean;
-  onPlay: (clip: ClipRange) => void;
+  /** 合并上下文播放时随播放头高亮当前句；未传则用接口返回的 currentId */
+  playingLineId?: number;
+  onPlay: (lineId: number, clip: ClipRange) => void;
 }
 
-export function ContextDrawer({ lineId, mode, terms, canPlay, onPlay }: Props) {
+export function ContextDrawer({ lineId, mode, terms, canPlay, playingLineId, onPlay }: Props) {
   const ctx = useQuery({
     queryKey: ['context', lineId],
     queryFn: ({ signal }) => fetchContext(lineId, signal),
@@ -31,7 +34,7 @@ export function ContextDrawer({ lineId, mode, terms, canPlay, onPlay }: Props) {
   if (ctx.isError) {
     return (
       <div role="alert" className="mt-3 flex items-center justify-between gap-3 rounded-card border border-danger/30 bg-danger-soft px-4 py-2 text-sm text-danger">
-        <span>上下文加载失败</span>
+        <span>{formatApiErrorMessage(ctx.error, '上下文加载失败')}</span>
         <button
           type="button"
           onClick={() => void ctx.refetch()}
@@ -46,7 +49,7 @@ export function ContextDrawer({ lineId, mode, terms, canPlay, onPlay }: Props) {
   return (
     <ol className="mt-3 animate-fade-up divide-y divide-line overflow-hidden rounded-card border border-line">
       {ctx.data.lines.map((l) => {
-        const isCurrent = l.id === ctx.data.currentId;
+        const isCurrent = playingLineId !== undefined ? l.id === playingLineId : l.id === ctx.data.currentId;
         const display = pickDisplayLines(l, mode);
         return (
           <li key={l.id} className={isCurrent ? 'bg-brand-soft' : 'bg-surface'}>
@@ -54,7 +57,7 @@ export function ContextDrawer({ lineId, mode, terms, canPlay, onPlay }: Props) {
             <button
               type="button"
               disabled={!canPlay}
-              onClick={() => onPlay({ startMs: l.startMs, endMs: l.endMs })}
+              onClick={() => onPlay(l.id, { startMs: l.startMs, endMs: l.endMs })}
               aria-current={isCurrent ? 'true' : undefined}
               className="group flex w-full items-start gap-3 px-3.5 py-2.5 text-left transition enabled:hover:bg-surface-muted disabled:cursor-default"
             >

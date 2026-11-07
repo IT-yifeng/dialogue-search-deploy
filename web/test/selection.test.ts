@@ -11,6 +11,7 @@ const item = (id: number): SearchItem => ({
   en: `sample line ${id}`,
   zh: `样例台词 ${id}`,
   hasVideo: true,
+  thumbnailUrl: null,
 });
 
 /** 内存版 storage，顺便记录写入，验证“刷新后能恢复” */
@@ -105,7 +106,8 @@ describe('parseStoredSelection', () => {
 
   it('丢弃结构不对的条目，保留合法的；按 id 去重；最多 20 条', () => {
     const bad = { ...item(2), hasVideo: 'yes' };
-    const raw = JSON.stringify([item(1), bad, item(1), { id: 5 }, null, item(3)]);
+    const badThumb = { ...item(2), thumbnailUrl: 1 };
+    const raw = JSON.stringify([item(1), bad, badThumb, item(1), { id: 5 }, null, item(3)]);
     expect(parseStoredSelection(raw).map((i) => i.id)).toEqual([1, 3]);
 
     const many = JSON.stringify(Array.from({ length: 30 }, (_, i) => item(i + 1)));

@@ -8,6 +8,9 @@ COPY pipeline/package.json pipeline/
 COPY web/package.json web/
 RUN npm ci -w web
 COPY web web
+# 投诉邮箱等 VITE_* 须在构建阶段注入（与 vite.config envDir=仓库根 一致）
+ARG VITE_COMPLAINT_EMAIL
+ENV VITE_COMPLAINT_EMAIL=${VITE_COMPLAINT_EMAIL}
 # 产出 web/dist
 RUN npm run build -w web
 

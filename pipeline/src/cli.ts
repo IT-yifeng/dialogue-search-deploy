@@ -9,6 +9,7 @@ import { runQa } from './qa.js';
 import { createR2Store, readR2Config } from './r2Store.js';
 import { loadOffsets, parseEpisodeFile, scanSubs, scanVideos, episodeId } from './scan.js';
 import { uploadAll } from './upload.js';
+import { runThumbnails } from './thumbnails.js';
 
 const USAGE = `用法：npm run pipeline -- <子命令> [选项]
 
@@ -24,6 +25,9 @@ const USAGE = `用法：npm run pipeline -- <子命令> [选项]
   upload               S5：STORAGE_DRIVER=r2 时把 work/mp4 上传到 R2（已存在且大小一致的跳过，可随时中断重跑）；
                        无论哪种模式，最后都校验 work/mp4 与库里的记录是否对应
       --force          已存在也重新上传
+  thumbnails           S5.5：从 work/mp4 截台词中点 JPEG → 上传 R2（或拷入 work/mp4）→ 写 lines.frame_key
+      --only S01E01    只处理指定集（可重复）
+      --force          重截重传并覆盖库里的 frame_key
   qa                   S6：生成 work/qa-report.md；有不合格的集时退出码为 1
 `;
 
@@ -197,6 +201,27 @@ async function cmdUpload(args: string[]): Promise<number> {
   }
 }
 
+async function cmdThumbnails(args: string[]): Promise<number> {
+  const { values } = parseArgs({
+    args,
+    options: { only: { type: 'string', multiple: true }, force: { type: 'boolean' } },
+    strict: true,
+  });
+  loadEnv();
+  const only = onlySet(values.only);
+  console.log('[thumbnails] 开始：截帧并写 frame_key（需已 transcode + ingest + migrate）');
+  const t0 = Date.now();
+  const r = await runThumbnails({
+    only,
+    force: values.force === true,
+    onEpisode: (id, n) => console.log(`[thumbnails] ${id}：${n} 条台词`),
+  });
+  console.log(
+    `[thumbnails] 完成，用时 ${ago(t0)}：涉及 ${r.episodes} 集，成功写入/跳过 ${r.linesOk} 条，失败 ${r.failed}`,
+  );
+  return r.failed > 0 ? 1 : 0;
+}
+
 async function cmdQa(): Promise<number> {
   const client = await connectDb();
   try {
@@ -220,6 +245,8 @@ async function main(): Promise<number> {
       return cmdIngest(rest);
     case 'upload':
       return cmdUpload(rest);
+    case 'thumbnails':
+      return cmdThumbnails(rest);
     case 'qa':
       return cmdQa();
     default:

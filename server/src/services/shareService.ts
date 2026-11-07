@@ -2,8 +2,10 @@
 // 这里不碰 SQL（交给 repos），也不碰 HTTP（交给 routes）。
 import { badRequest, notFound } from '../lib/httpError.js';
 import { shortId } from '../lib/shortId.js';
-import type { LinesRepo, SearchHit } from '../repos/linesRepo.js';
+import { attachThumbnailUrls, type SearchLineItem } from '../lib/thumbnailUrl.js';
+import type { LinesRepo } from '../repos/linesRepo.js';
 import type { SharesRepo } from '../repos/sharesRepo.js';
+import type { StorageDriver } from '../storage/types.js';
 import type { PlayResult, PlayService } from './playService.js';
 
 /** 手册 §1 / §6：一次最多分享 20 条 */
@@ -23,7 +25,7 @@ export interface ShareView {
   note: string | null;
   createdAt: string;
   /** 顺序即用户勾选顺序；库里已不存在的台词会被略过 */
-  items: SearchHit[];
+  items: SearchLineItem[];
 }
 
 export interface ShareService {
@@ -37,6 +39,7 @@ export interface ShareServiceDeps {
   shares: SharesRepo;
   lines: LinesRepo;
   play: PlayService;
+  storage: StorageDriver;
   /** 站点外部地址，用来拼分享链接（PUBLIC_BASE_URL） */
   publicBaseUrl: string;
   /** 注入 ID 生成器，测试里才能稳定地构造“冲突”场景 */
@@ -59,7 +62,7 @@ function normalizeNote(note: string | null | undefined): string | null {
 }
 
 export function createShareService(deps: ShareServiceDeps): ShareService {
-  const { shares, lines, play } = deps;
+  const { shares, lines, play, storage } = deps;
   const genId = deps.genId ?? shortId;
   const base = deps.publicBaseUrl.replace(/\/+$/, '');
 
@@ -95,11 +98,13 @@ export function createShareService(deps: ShareServiceDeps): ShareService {
       const found = await lines.findByIds(share.lineIds);
       const byId = new Map(found.map((l) => [l.id, l]));
       // 按存储的顺序还原；语料重灌后已不存在的台词直接略过
-      const items = share.lineIds.flatMap((lid) => {
+      const rawItems = share.lineIds.flatMap((lid) => {
         const hit = byId.get(lid);
         return hit ? [hit] : [];
       });
-      if (items.length === 0) throw notFound('分享不存在或已失效');
+      if (rawItems.length === 0) throw notFound('分享不存在或已失效');
+
+      const items = await attachThumbnailUrls(rawItems, storage);
 
       // 读取成功才计数；失败的请求不应该抬高浏览量
       await shares.incrementView(id);

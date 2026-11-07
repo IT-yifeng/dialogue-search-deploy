@@ -4,6 +4,7 @@
 // 不支持的话 <video> 只能从头下载，“点播放跳到 12:03”会变得很慢甚至失败。
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
+import path from 'node:path';
 import { Readable } from 'node:stream';
 import { Hono } from 'hono';
 import { notFound } from '../lib/httpError.js';
@@ -42,11 +43,16 @@ export function createMediaRoutes(driver: LocalDriver): Hono {
       throw notFound('视频不存在');
     }
 
+    const ext = path.posix.extname(key).toLowerCase();
+    const contentType = ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' : 'video/mp4';
+
     const headers: Record<string, string> = {
-      'Content-Type': 'video/mp4',
+      'Content-Type': contentType,
       'Accept-Ranges': 'bytes',
       // 本地文件可能被重新转码覆盖，开发时宁可每次校验，也不要播到旧版本
       'Cache-Control': 'no-cache',
+      // M8：偶发 crossOrigin 请求时仍可读像素；同源截图主路径不设 crossOrigin
+      'Access-Control-Allow-Origin': '*',
     };
 
     const range = parseRange(c.req.header('Range'), size);

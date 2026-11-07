@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom';
 import { fetchLine } from '../api/lines';
 import { fetchEpisodes, searchLines } from '../api/search';
 import type { SearchItem } from '../api/types';
+import { CopyrightFooter } from '../components/CopyrightFooter';
 import { FilterBar } from '../components/FilterBar';
 import { Hero } from '../components/Hero';
 import { LogoMark } from '../components/icons';
@@ -21,6 +22,7 @@ import { useSearchParamsState } from '../hooks/useSearchParamsState';
 import { splitTermsForHighlight } from '../lib/highlight';
 import { buildSearchParams } from '../lib/searchParams';
 import { copyToClipboard } from '../lib/copyText';
+import { trackEngagement } from '../lib/trackEngagement';
 import { useToastStore } from '../store/toast';
 import { useLangStore } from '../store/lang';
 import { useSelectionStore } from '../store/selection';
@@ -40,6 +42,7 @@ export default function SearchPage() {
   const showToast = useToastStore((s) => s.show);
   const [shareOpen, setShareOpen] = useState(false);
   const [overlay, setOverlay] = useState<OverlayState | null>(null);
+  const [overlayContextOpen, setOverlayContextOpen] = useState(false);
   /** 蒙版里「上一条 / 下一条」跨页时，等新页数据到了再定位到哪一条 */
   const pagePickRef = useRef<'first' | 'last' | null>(null);
   /** 用户点「关闭」会同时清 overlay 与 URL 的 lineId；若只先清 overlay，深链 effect 会因 URL 仍带 lineId 立刻把蒙版再打开，表现为要点两次关闭 */
@@ -86,11 +89,13 @@ export default function SearchPage() {
     // 先立标志：避免「先 setOverlay(null) → URL 仍带 lineId → 深链 effect 立刻再打开蒙版」的双击关闭
     skipDeepLinkReopenRef.current = true;
     setOverlay(null);
+    setOverlayContextOpen(false);
     setLineId(undefined);
   }, [setLineId]);
 
   const openSearchOverlay = useCallback(
-    (lines: SearchItem[], index: number) => {
+    (lines: SearchItem[], index: number, context?: boolean) => {
+      setOverlayContextOpen(!!context);
       setOverlay({ source: 'search', lines, index });
       setLineId(lines[index]?.id);
     },
@@ -100,6 +105,7 @@ export default function SearchPage() {
   const handleDiscoverPick = useCallback(
     (lines: SearchItem[], line: SearchItem, index: number) => {
       if (lines.length === 0) return;
+      setOverlayContextOpen(false);
       setOverlay({ source: 'discover', lines, index });
       setLineId(line.id);
     },
@@ -214,6 +220,7 @@ export default function SearchPage() {
   const onCopyDeepLink = useCallback(async () => {
     if (!overlayLine) return;
     const ok = await copyToClipboard(buildLineDeepLink(overlayLine.id));
+    if (ok) trackEngagement({ kind: 'copy', lineId: overlayLine?.id });
     showToast(ok ? '链接已复制' : '复制失败，请手动复制地址栏');
   }, [overlayLine, buildLineDeepLink, showToast]);
 
@@ -253,7 +260,11 @@ export default function SearchPage() {
           </p>
         )}
         <div className={`transition-opacity ${search.isPlaceholderData ? 'opacity-50' : ''}`}>
-          <SearchResultGrid items={data.items} terms={terms} onOpenOverlay={(i) => openSearchOverlay(data.items, i)} />
+          <SearchResultGrid
+            items={data.items}
+            terms={terms}
+            onOpenOverlay={(i, opts) => openSearchOverlay(data.items, i, opts?.context)}
+          />
         </div>
         <Pagination page={page} totalPages={totalPages} onChange={handlePageChange} />
       </div>
@@ -304,6 +315,7 @@ export default function SearchPage() {
         <main className={hasQuery ? 'mt-5' : ''}>
           {hasQuery && <h1 className="sr-only">搜索结果</h1>}
           {body}
+          <CopyrightFooter />
         </main>
       </div>
 
@@ -312,12 +324,20 @@ export default function SearchPage() {
         line={overlayLine}
         terms={terms}
         onClose={closeOverlay}
-        onPrev={overlayPrevNext.prev}
-        onNext={overlayPrevNext.next}
+        onPrev={() => {
+          setOverlayContextOpen(false);
+          overlayPrevNext.prev();
+        }}
+        onNext={() => {
+          setOverlayContextOpen(false);
+          overlayPrevNext.next();
+        }}
         disablePrev={overlayPrevNext.dPrev}
         disableNext={overlayPrevNext.dNext}
         shareUrl={shareUrl}
         onCopyLink={onCopyDeepLink}
+        contextOpen={overlayContextOpen}
+        onFocusLineId={setLineId}
       />
 
       <SelectionBar onOpenShare={() => setShareOpen(true)} />

@@ -16,7 +16,7 @@ export function DiscoverGrid({ lines, terms, onPick }: Props) {
       <p className="mx-auto mt-2 max-w-lg text-center text-meta text-ink-sub">
         从有视频的台词里随机抽 9 条，点卡片看片段
       </p>
-      <ul className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      <ul className="mt-6 grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-3">
         {lines.map((line, i) => (
           <li key={line.id}>
             <SnippetCard line={line} terms={terms} variant="discover" onOpenOverlay={() => onPick(line, i)} />

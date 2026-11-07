@@ -7,6 +7,7 @@ import { pickDisplayLines, pickEpisodeTitle, type LangMode } from '../lib/displa
 import { formatEpisodeCode, formatTime } from '../lib/formatTime';
 import { usePlayerStore } from '../store/player';
 import { ClipPlayer, type ClipRange, type PlaySource } from './ClipPlayer';
+import { VideoSubtitleOverlay } from './VideoSubtitleOverlay';
 import { PlayIcon, ReplayIcon } from './icons';
 
 interface Props {
@@ -112,8 +113,27 @@ export function ShareLineCard({ shareId, line, mode }: Props) {
         {!line.hasVideo && <span className="text-meta text-ink-faint">暂无视频</span>}
       </div>
 
-      {showPlayer && (
-        <ClipPlayer lineId={line.id} source={source} clip={clip} onStatusChange={setStatus} onClose={closePlayer} />
+      {showPlayer && clip && (
+        <div className="mt-3 overflow-hidden rounded-card ring-1 ring-line">
+          <ClipPlayer
+            lineId={line.id}
+            source={source}
+            clip={clip}
+            embedded
+            onStatusChange={setStatus}
+          >
+            <VideoSubtitleOverlay line={line} terms={[]} mode={mode} />
+          </ClipPlayer>
+          <div className="border-t border-line bg-surface px-2 py-1 text-right">
+            <button
+              type="button"
+              onClick={closePlayer}
+              className="rounded-pill px-2 py-1 text-meta text-ink-sub transition hover:text-brand-fg"
+            >
+              收起播放器
+            </button>
+          </div>
+        </div>
       )}
     </li>
   );
